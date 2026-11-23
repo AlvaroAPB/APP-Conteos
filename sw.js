@@ -8,11 +8,15 @@
  */
 
 const CACHE_PREFIJO = "conteos-";
-const CACHE_VERSION = CACHE_PREFIJO + "v2c-1";
+const CACHE_VERSION = CACHE_PREFIJO + "v2d-1";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.json",
+  "./icono-192.png",
+  "./icono-512.png",
+  "./icono-192-maskable.png",
+  "./icono-512-maskable.png",
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js",
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css",
   "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",

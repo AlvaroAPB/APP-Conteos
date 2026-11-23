@@ -16,6 +16,12 @@
 
   Autor: Álvaro Parra Boccoli
   ----------------------------------------------------------------------------
+  VERSIÓN v2d
+  ----------------------------------------------------------------------------
+  1) Aviso para instalar la app (Android: botón «Instalar»; iPhone y otros
+     casos: cómo hacerlo desde el menú). Iconos PNG para que Chrome la
+     ofrezca como app instalable. Una vez instalada, el aviso desaparece.
+  ----------------------------------------------------------------------------
   VERSIÓN v2c
   ----------------------------------------------------------------------------
   1) Ficha del árbol: panel que sube desde abajo al tocar un árbol en el mapa
@@ -60,8 +66,9 @@
 <meta name="apple-mobile-web-app-title" content="Conteos">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icono-192.png">
 <link rel="icon" href="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%237a5230'/%3E%3Ctext x='32' y='45' font-family='sans-serif' font-size='38' font-weight='700' text-anchor='middle' fill='%23fff'%3EC%3C/text%3E%3C/svg%3E">
-<title>Conteos de labores · v2c</title>
+<title>Conteos de labores · v2d</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -209,6 +216,11 @@ table.lista tr.edit{background:#fff5e0}
 .fz-rama .e{width:52px;text-align:right;color:#5b6467;white-space:nowrap}
 .fz-ley{display:flex;gap:12px;font-size:11px;color:#5b6467;margin-top:8px;flex-wrap:wrap}
 .tira span{cursor:pointer}
+#aviso-instalar{max-width:760px;margin:8px auto 0;padding:0 8px}
+.instalar{background:#1b5e9e;color:#fff;border-radius:10px;padding:12px;display:flex;gap:10px;align-items:center}
+.instalar .tx{flex:1;font-size:13px;line-height:1.4}
+.instalar .tx b{font-size:15px}
+.instalar button{border:none;border-radius:8px;font-weight:800;cursor:pointer}
 @keyframes pulso{0%,100%{box-shadow:0 0 0 rgba(168,58,58,.5)}50%{box-shadow:0 0 12px rgba(168,58,58,.9)}}
 </style>
 </head>
@@ -247,6 +259,7 @@ table.lista tr.edit{background:#fff5e0}
   <button id="t-config" class="cfg" onclick="ir('config')">⚙</button>
 </div>
 
+<div id="aviso-instalar"></div>
 <main>
   <section id="v-contar"></section>
   <section id="v-parcela" style="display:none"></section>
@@ -275,7 +288,7 @@ table.lista tr.edit{background:#fff5e0}
 // ============================================================================
 // CONFIGURACIÓN
 // ============================================================================
-const VERSION = "v2c";
+const VERSION = "v2d";
 const PRUEBA = true;                    // todo lo que se sube va marcado como prueba
 const PIN_TECNICO = "2468";
 const SUPABASE_URL = "https://api-camposatroyal.duckdns.org";
@@ -1808,6 +1821,7 @@ async function pintarConfig(){
     '<div class="fila-btn"><button class="btn" onclick="elegirFinca()">' + (d ? "Cambiar finca" : "Elegir finca") + '</button>' + (d ? '<button class="btn s" onclick="prepararFinca(\'' + esc(d.finca.codigo) + '\')">Actualizar planos, normas y satélite</button>' : '') + '</div></div>';
   h += '<div class="card"><div style="font-weight:800">3. Datos de este móvil</div><div style="font-size:13px;color:#5b6467;margin-top:3px">' + DATOS.forms.length + ' conteo(s) · ' + DATOS.arboles.length + ' árbol(es) · ' + nPendientes() + ' por subir' + (est ? '<br>' + est : '') + '</div>' +
     '<div class="fila-btn"><button class="btn s peq" onclick="excelTodo()">Excel de todo</button><button class="btn s peq" onclick="actualizarApp()">Actualizar app</button><button class="btn peligro peq" onclick="borrarSatelite()">Borrar satélite</button></div>' +
+    '<div style="font-size:12px;margin-top:8px;color:' + (estaInstalada() ? VERDE : ALTO) + '">' + (estaInstalada() ? '✓ App instalada en este móvil' : '✗ La app no está instalada: instálala para trabajar sin conexión') + '</div>' +
     '<div style="font-size:11px;color:#8b9295;margin-top:8px">Versión ' + VERSION + (PRUEBA ? ' (prueba)' : '') + ' · dispositivo ' + esc(dispositivo()) + '</div></div>';
   h += '<button class="btn" style="width:100%;margin-top:6px" onclick="ir(\'contar\')">Listo · volver a Contar</button>';
   c.innerHTML = h;
@@ -1883,6 +1897,40 @@ async function actualizarApp(){
 }
 
 // ============================================================================
+// INSTALAR LA APP (clave: instalada, funciona sin red y el móvil no borra los datos)
+// ============================================================================
+let _promptInstalar = null;
+function estaInstalada(){ return (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true; }
+function esIOS(){ return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); _promptInstalar = e; pintarAvisoInstalar(); });
+window.addEventListener("appinstalled", () => { _promptInstalar = null; pintarAvisoInstalar(); aviso("App instalada. Ábrela desde el icono «Conteos»."); });
+function pintarAvisoInstalar(){
+  const el = $("aviso-instalar");
+  if(!el) return;
+  if(estaInstalada() || sessionStorage.getItem("conteos.instalar_luego")){ el.innerHTML = ""; return; }
+  let tx, btn;
+  if(_promptInstalar){
+    tx = '<b>📲 Instala la app en este móvil</b><br>Funciona sin conexión y los conteos quedan a salvo.';
+    btn = '<button onclick="instalarApp()" style="background:#fff;color:#1b5e9e;padding:12px 16px;font-size:15px">Instalar</button>';
+  } else if(esIOS()){
+    tx = '<b>📲 Instala la app</b><br>Pulsa <b>Compartir</b> (el cuadrado con la flecha ↑) y elige <b>«Añadir a pantalla de inicio»</b>.';
+    btn = '';
+  } else {
+    tx = '<b>📲 Instala la app</b><br>En Chrome: menú <b>⋮</b> → <b>«Instalar aplicación»</b> o <b>«Añadir a pantalla de inicio»</b>.';
+    btn = '';
+  }
+  el.innerHTML = '<div class="instalar"><div class="tx">' + tx + '</div>' + btn +
+    '<button onclick="sessionStorage.setItem(\'conteos.instalar_luego\',\'1\');pintarAvisoInstalar()" style="background:transparent;color:#fff;font-size:20px;padding:4px 6px" title="Ahora no">✕</button></div>';
+}
+async function instalarApp(){
+  if(!_promptInstalar){ pintarAvisoInstalar(); return; }
+  _promptInstalar.prompt();
+  try{ const r = await _promptInstalar.userChoice; if(r && r.outcome === "accepted") aviso("Instalando…"); } catch(e){}
+  _promptInstalar = null;
+  pintarAvisoInstalar();
+}
+
+// ============================================================================
 // ARRANQUE
 // ============================================================================
 document.querySelectorAll("#teclado .keys button").forEach(b => b.addEventListener("click", () => tecla(b.dataset.k)));
@@ -1890,7 +1938,7 @@ window.addEventListener("online", () => { pintarRed(); if(S.vista === "conteos")
 window.addEventListener("offline", () => { pintarRed(); if(S.vista === "conteos") pintarConteos(); });
 
 async function init(){
-  pintarRed(); pintarCabecera();
+  pintarRed(); pintarCabecera(); pintarAvisoInstalar();
   try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch(e){}
   try{ await cargarDatos(); }
   catch(e){ await alerta("El móvil no deja guardar datos", "No se puede usar el almacenamiento del navegador (" + esc(e.message || e) + "). Sal del modo incógnito o usa Chrome."); }

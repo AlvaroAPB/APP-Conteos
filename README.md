@@ -1,4 +1,4 @@
-# Conteos de labores · v2c
+# Conteos de labores · v2d
 
 App de campo para capturar y controlar en el momento los conteos de **poda** y **aclareo**. Funciona sin conexión y sube los conteos a la base con un botón.
 
