@@ -1,0 +1,1927 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  CONTEOS DE LABORES · RoyAgrico
+  ----------------------------------------------------------------------------
+  App de campo (PWA) para capturar y controlar en el momento los conteos de
+  poda (brindillos) y aclareo (frutos). Funciona sin conexión.
+
+  Datos: Supabase de la empresa, capa labores (LABORES_APP_01.sql):
+    labores.app_fincas()            fincas con planos (para configurar el móvil)
+    labores.app_datos_finca(finca)  parcelas, polígono vigente, madre, cultivo,
+                                    ciruelo y norma de la campaña
+    labores.app_subir_conteo(p)     sube un conteo entero, con versiones
+  En el móvil: IndexedDB "conteos.datos" e imágenes en "conteos.tiles".
+  Comparte origen con la app de plagas: todo lleva el prefijo "conteos".
+
+  Autor: Álvaro Parra Boccoli
+  ----------------------------------------------------------------------------
+  VERSIÓN v2c
+  ----------------------------------------------------------------------------
+  1) Ficha del árbol: panel que sube desde abajo al tocar un árbol en el mapa
+     o un cuadro de la tira de colores. Valor grande con su grado y desvío,
+     barra de la norma, ramas, por rama y % de largos, barras rama a rama
+     (L, C, Sc), composición total y, si se corrigió, cómo estaba antes.
+     Botón «Corregir este árbol». Sustituye al globo del mapa.
+  ----------------------------------------------------------------------------
+  VERSIÓN v2b
+  ----------------------------------------------------------------------------
+  1) La rama vacía que aparece tras la última (p. ej. R7) no cuenta: ni vacía
+     ni con ceros. Si está en blanco, la tecla verde pasa a «Guardar ✓».
+  2) Botón «Configuración» (sin «técnico») en un móvil sin configurar.
+  ----------------------------------------------------------------------------
+  VERSIÓN v2a
+  ----------------------------------------------------------------------------
+  Cambios respecto a v1a (primera prueba):
+  1) El móvil lo configura el técnico (pestaña ⚙ con PIN): finca, planos y
+     satélite. El contador no elige finca: al abrir solo indica quién cuenta.
+  2) Fincas y parcelas de la base original (nucleo), no de segPlagas.
+  3) Empezar un conteo = labor y parcela. Fecha de hoy. Ciruelo y norma
+     vienen de la base. La norma se puede editar en campo y queda marcada.
+     Fuera: «poda de», casillas de ciruelo y semicortos, norma por rama.
+  4) Captura: tecla «← Atrás»; fuera el botón «Árbol sin ramas» (si se guarda
+     un árbol vacío, pregunta). Aviso de tecleo: valor muy alto frente a la
+     media del conteo (o frente a un tope fijo en los primeros árboles).
+  5) Cálculos y colores del dashboard: grados 0-3 (margen 5 %), desvío desde
+     el límite, ámbar si se queda corto y rojo si se pasa, % con margen,
+     desvío con y sin signo. Barra de la norma y tira de árboles en vivo.
+  6) Pestaña «Parcela» (cómo va): mapa con el desvío de cada árbol o el % de
+     largos, tendencia general y resumen por grupos de filas.
+  7) Subida a la base con un botón: todo o nada, sin duplicar. Lo corregido
+     después de subir entra como versión nueva. Marca de prueba.
+  ============================================================================
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0b6e4f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Conteos">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%237a5230'/%3E%3Ctext x='32' y='45' font-family='sans-serif' font-size='38' font-weight='700' text-anchor='middle' fill='%23fff'%3EC%3C/text%3E%3C/svg%3E">
+<title>Conteos de labores · v2c</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#eef0ef;color:#14181a;font-size:15px}
+button,.celda{touch-action:manipulation}
+select,input,button{font-family:inherit;font-size:15px}
+header{background:#0b6e4f;color:#fff;padding:8px 12px;position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:50px}
+header .t{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header .s{font-size:11px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chips{display:flex;gap:5px;flex:none}
+.chip{background:rgba(255,255,255,.2);padding:6px 9px;border-radius:12px;font-size:12px;font-weight:600;border:none;color:#fff;cursor:pointer;white-space:nowrap}
+.chip.ok{background:#7dd870;color:#0a3d1f}
+.chip.mal{background:#ff9a8b;color:#5a1810}
+.tabs{display:flex;background:#fff;border-bottom:1px solid #d5dad8;position:sticky;top:50px;z-index:19}
+.tabs button{flex:1;padding:11px 2px;border:none;background:none;font-size:14px;font-weight:600;color:#5b6467;border-bottom:3px solid transparent;cursor:pointer;position:relative}
+.tabs button.on{color:#0b6e4f;border-color:#0b6e4f}
+.tabs button.cfg{flex:0 0 52px}
+.badge{display:inline-block;min-width:18px;padding:1px 5px;border-radius:9px;background:#b36b00;color:#fff;font-size:11px;font-weight:800;margin-left:3px}
+main{padding:8px;max-width:760px;margin:0 auto;padding-bottom:30px}
+h2{font-size:11px;color:#5b6467;text-transform:uppercase;letter-spacing:.5px;margin:14px 2px 6px}
+.card{background:#fff;border:1px solid #d5dad8;border-radius:10px;padding:10px;margin-bottom:8px}
+.vacio{padding:22px;text-align:center;color:#8b9295;font-size:14px}
+.campo{display:block;font-size:12px;color:#5b6467;margin:8px 0 0}
+.campo input{width:100%;padding:11px;border:1px solid #d5dad8;border-radius:8px;margin-top:4px;font-size:16px}
+select.grande{width:100%;padding:12px;border:2px solid #d5dad8;border-radius:10px;background:#fff;color:#0b6e4f;font-weight:700;font-size:17px}
+.btn{padding:13px;border-radius:10px;border:none;font-size:15px;font-weight:700;cursor:pointer;background:#0b6e4f;color:#fff}
+.btn:active{transform:scale(.98)}
+.btn.s{background:#f2f5f3;color:#14181a;border:1px solid #d5dad8}
+.btn.peligro{background:#fff;color:#a83a3a;border:1.5px solid #a83a3a}
+.btn.peq{padding:7px 11px;font-size:12px}
+.btn[disabled]{opacity:.5}
+.fila-btn{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.fila-btn .btn{flex:1}
+.seg{display:flex;gap:6px}
+.seg button{flex:1;padding:12px;border:2px solid #d5dad8;border-radius:10px;background:#fff;font-size:16px;font-weight:700;color:#5b6467;cursor:pointer}
+.seg button.on{border-color:#0b6e4f;background:#e2f0ea;color:#0b6e4f}
+.seg.peq button{padding:7px;font-size:13px}
+.enlace{background:none;border:none;color:#0b6e4f;text-decoration:underline;font-weight:700;cursor:pointer;padding:0;font-size:13px}
+.aviso-gps{border-radius:10px;padding:10px 12px;margin-top:8px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.franja{margin-top:6px;padding:7px 10px;border-radius:8px;font-size:12px;font-weight:600}
+.info-parc{margin-top:10px;padding:10px;background:#f5f7f6;border-radius:8px;font-size:13px;line-height:1.5}
+.tag{display:inline-block;padding:1px 7px;border-radius:8px;font-size:11px;font-weight:700;background:#efe4d4;color:#7a5230;margin-left:4px}
+.tag.edit{background:#fff0c2;color:#8a5a00}
+.cab-form .l1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.cab-form .tit{font-size:17px;font-weight:800}
+.cab-form .sub{font-size:12px;color:#5b6467;margin-top:2px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:8px}
+.stat{background:#f5f7f6;border-radius:8px;padding:6px 3px;text-align:center}
+.stat .k{font-size:10px;color:#5b6467;text-transform:uppercase;letter-spacing:.3px}
+.stat .v{font-size:19px;font-weight:800;margin-top:1px;line-height:1.15}
+.stat .e{font-size:10px;font-weight:700}
+.barra-norma{position:relative;height:34px;margin:12px 4px 4px}
+.barra-norma .eje{position:absolute;left:0;right:0;top:12px;height:10px;border-radius:5px;background:#eceeed}
+.barra-norma .banda{position:absolute;top:12px;height:10px}
+.barra-norma .tick{position:absolute;top:9px;width:3px;height:16px;border-radius:2px;margin-left:-1px}
+.barra-norma .media{position:absolute;top:0;margin-left:-14px;width:28px;text-align:center;font-size:10px;font-weight:800}
+.barra-norma .media i{display:block;width:0;height:0;margin:0 auto;border-left:7px solid transparent;border-right:7px solid transparent;border-top:9px solid #14181a}
+.barra-norma .lim{position:absolute;top:24px;font-size:10px;color:#5b6467;margin-left:-14px;width:28px;text-align:center}
+.tira{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px}
+.tira span{width:16px;height:16px;border-radius:4px;display:inline-block}
+.idarb{display:flex;gap:6px;margin-top:8px}
+.idarb .c{flex:1;min-width:0}
+.idarb .c .k{font-size:11px;color:#5b6467;margin-bottom:2px}
+.celda{border:2px solid #d5dad8;border-radius:8px;background:#fff;text-align:center;font-size:22px;font-weight:800;min-height:44px;line-height:40px;cursor:pointer;color:#14181a;user-select:none}
+.celda.vac{color:#c0c7c3}
+.celda.prop{color:#8b9295;font-style:italic}
+.celda.foco{border-color:#0b6e4f;background:#e8f5ee;box-shadow:0 0 0 2px #0b6e4f inset}
+.celda.sospecha{border-color:#a83a3a;color:#a83a3a;background:#fbeaea}
+table.ramas{width:100%;border-collapse:separate;border-spacing:4px;margin-top:4px}
+table.ramas th{font-size:11px;color:#5b6467;font-weight:700;text-align:center;padding:0}
+table.ramas td{padding:0}
+table.ramas td.rl{width:34px;font-size:13px;font-weight:700;color:#5b6467;text-align:center;cursor:pointer}
+table.ramas td.eq{width:56px;font-size:12px;color:#5b6467;text-align:right;white-space:nowrap}
+table.ramas .celda{min-height:38px;line-height:34px;font-size:20px}
+.res-arbol{margin-top:6px;padding:8px 10px;border-radius:8px;background:#f5f7f6;font-size:13px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center}
+.res-arbol b{font-size:16px}
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;color:#fff}
+table.lista{width:100%;border-collapse:collapse;font-size:13px}
+table.lista th{background:#f7f9f8;color:#5b6467;font-size:10px;text-transform:uppercase;padding:6px 4px;text-align:right}
+table.lista th.iz,table.lista td.iz{text-align:left}
+table.lista td{padding:8px 4px;border-bottom:1px solid #eee;text-align:right}
+table.lista tr.clic{cursor:pointer}
+table.lista tr.edit{background:#fff5e0}
+.punto{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+#teclado{position:fixed;left:0;right:0;bottom:0;background:#e4e8e6;border-top:1px solid #c9cfcc;padding:6px 8px calc(6px + env(safe-area-inset-bottom));z-index:30;display:none}
+#teclado .acc{display:flex;gap:6px;margin-bottom:6px}
+#teclado .acc button{flex:1;padding:11px 4px;border-radius:10px;border:none;font-size:14px;font-weight:800;cursor:pointer}
+#teclado .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+#teclado .keys button{height:50px;border:1px solid #cfd5d2;border-radius:10px;background:#fff;font-size:25px;font-weight:700;color:#14181a;cursor:pointer}
+#teclado .keys button:active{background:#d6eadf}
+#teclado .keys button.ok{background:#0b6e4f;color:#fff;border-color:#0b6e4f;font-size:17px}
+#teclado .keys button.bs{background:#f2f5f3;font-size:22px}
+.mapa-grande{width:100%;height:56vh;border-radius:10px;border:1px solid #d5dad8;background:#e8ece9}
+.leyenda{font-size:12px;color:#5b6467;margin-top:6px;display:flex;gap:4px 10px;flex-wrap:wrap}
+.mk{border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;box-sizing:border-box}
+.form-item{border-left:5px solid #d5dad8}
+.form-item.abierto{border-left-color:#0b6e4f}
+.form-item .h{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.form-item .h b{font-size:16px}
+.form-item .i{font-size:12px;color:#5b6467;margin-top:3px}
+.estado-sub{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap}
+.velo{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9000;display:none;align-items:flex-start;justify-content:center;padding:24px 14px;overflow-y:auto}
+.velo.on{display:flex}
+.hoja{background:#fff;border-radius:12px;padding:18px;max-width:480px;width:100%}
+.hoja h3{margin:0 0 10px;font-size:17px}
+.barra{height:8px;background:#e0e5e2;border-radius:4px;overflow:hidden;margin-top:8px}
+.barra i{display:block;height:100%;width:0;background:#0b6e4f;transition:width .2s}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99990;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal-caja{background:#fff;border-radius:12px;padding:18px;max-width:420px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.modal-caja.rojo{border-top:6px solid #a83a3a}
+.modal-t{font-size:16px;font-weight:800;margin-bottom:8px}
+.modal-m{font-size:14px;color:#3d4547;line-height:1.5;margin-bottom:10px}
+.modal-m input{width:100%;padding:10px;border:1px solid #d5dad8;border-radius:8px;font-size:17px;margin-top:4px}
+.modal-caja>button{display:block;width:100%;padding:12px;margin-top:8px;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer}
+.toast{position:fixed;left:50%;transform:translateX(-50%);top:112px;background:#14181a;color:#fff;padding:11px 18px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:99995;text-align:center;max-width:88%}
+.toast.on{opacity:1}
+.toast.bajo{top:auto;bottom:24px}
+#login{position:fixed;inset:0;background:rgba(20,24,26,.88);z-index:99980;display:none;align-items:center;justify-content:center;padding:20px}
+#login .caja{background:#fff;border-radius:12px;padding:22px;max-width:380px;width:100%}
+.err{display:none;color:#a83a3a;font-size:12px;background:#fbeaea;padding:8px;border-radius:6px;margin-top:10px}
+.nombres{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.nombres button{padding:10px 14px;border:2px solid #d5dad8;border-radius:10px;background:#fff;font-size:15px;font-weight:700;cursor:pointer}
+#ficha-velo{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9500;display:none}
+#ficha-velo.on{display:block}
+#ficha{position:fixed;left:0;right:0;bottom:0;z-index:9600;background:#fff;border-radius:16px 16px 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.25);max-height:82vh;overflow-y:auto;padding:14px 16px calc(14px + env(safe-area-inset-bottom));transform:translateY(105%);transition:transform .22s ease-out;max-width:760px;margin:0 auto}
+#ficha.on{transform:translateY(0)}
+#ficha .asa{width:44px;height:5px;border-radius:3px;background:#d5dad8;margin:0 auto 10px}
+.fz-cab{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.fz-tit{font-size:19px;font-weight:800}
+.fz-sub{font-size:12px;color:#5b6467;margin-top:2px}
+.fz-valor{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+.fz-valor .n{font-size:38px;font-weight:800;line-height:1}
+.fz-valor .u{font-size:14px;color:#5b6467}
+.fz-datos{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:12px}
+.fz-datos div{background:#f5f7f6;border-radius:8px;padding:7px 4px;text-align:center}
+.fz-datos b{display:block;font-size:18px}
+.fz-datos span{font-size:10px;color:#5b6467;text-transform:uppercase;letter-spacing:.3px}
+.fz-rama{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px}
+.fz-rama .r{width:26px;font-weight:800;color:#5b6467}
+.fz-rama .b{flex:1;height:22px;background:#f2f4f3;border-radius:5px;overflow:hidden;display:flex}
+.fz-rama .b i{display:flex;align-items:center;justify-content:center;font-style:normal;font-size:11px;font-weight:800;color:#fff;min-width:0;overflow:hidden}
+.fz-rama .e{width:52px;text-align:right;color:#5b6467;white-space:nowrap}
+.fz-ley{display:flex;gap:12px;font-size:11px;color:#5b6467;margin-top:8px;flex-wrap:wrap}
+.tira span{cursor:pointer}
+@keyframes pulso{0%,100%{box-shadow:0 0 0 rgba(168,58,58,.5)}50%{box-shadow:0 0 12px rgba(168,58,58,.9)}}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="caja">
+    <h3 style="margin:0 0 6px;color:#0b6e4f">Entrar</h3>
+    <div id="login-motivo" style="font-size:13px;color:#5b6467;margin-bottom:6px"></div>
+    <label class="campo">Correo<input type="email" id="login-email" autocomplete="username"></label>
+    <label class="campo">Contraseña<input type="password" id="login-pass" autocomplete="current-password" onkeydown="if(event.key==='Enter')hacerLogin()"></label>
+    <div id="login-error" class="err"></div>
+    <div class="fila-btn">
+      <button class="btn s" onclick="cancelarLogin()">Ahora no</button>
+      <button class="btn" id="login-entrar" onclick="hacerLogin()">Entrar</button>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div style="min-width:0">
+    <div class="t" id="cab-finca">Conteos</div>
+    <div class="s" id="cab-sub"></div>
+  </div>
+  <div class="chips">
+    <button class="chip" id="chip-contador" onclick="pedirContador(true)" style="display:none"></button>
+    <button class="chip" id="chip-red"></button>
+    <button class="chip" id="chip-gps" onclick="iniciarGPS(true)">📍 GPS</button>
+  </div>
+</header>
+
+<div class="tabs">
+  <button id="t-contar" class="on" onclick="ir('contar')">Contar</button>
+  <button id="t-parcela" onclick="ir('parcela')">Parcela</button>
+  <button id="t-conteos" onclick="ir('conteos')">Conteos<span id="badge-sub"></span></button>
+  <button id="t-config" class="cfg" onclick="ir('config')">⚙</button>
+</div>
+
+<main>
+  <section id="v-contar"></section>
+  <section id="v-parcela" style="display:none"></section>
+  <section id="v-conteos" style="display:none"></section>
+  <section id="v-config" style="display:none"></section>
+</main>
+
+<div id="teclado">
+  <div class="acc" id="teclado-acc"></div>
+  <div class="keys">
+    <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+    <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+    <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+    <button data-k="B" class="bs">⌫</button><button data-k="0">0</button><button data-k="OK" class="ok">Siguiente →</button>
+  </div>
+</div>
+
+<div class="velo" id="velo"><div class="hoja" id="hoja"></div></div>
+<div class="toast" id="toast"></div>
+<div id="ficha-velo" onclick="cerrarFicha()"></div>
+<div id="ficha"></div>
+
+<script>
+"use strict";
+
+// ============================================================================
+// CONFIGURACIÓN
+// ============================================================================
+const VERSION = "v2c";
+const PRUEBA = true;                    // todo lo que se sube va marcado como prueba
+const PIN_TECNICO = "2468";
+const SUPABASE_URL = "https://api-camposatroyal.duckdns.org";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzkxMzg0MTQ0LCJleHAiOjE5NDkwNjQxNDR9.M8KhCBRAc3b_M0JPT09QD1weNG4uVI7ghb4W9WTjZTI";
+const ESQUEMA = "labores";
+const EMAIL_DEFECTO = "campo@royal.es";
+const MAX_RAMAS = 9;
+const ZOOM_MIN = 15, ZOOM_MAX = 18;
+const MARGEN_MIN_M = 15, MARGEN_MAX_M = 30, PRECISION_MAX_M = 50;
+const MARGEN_NORMA = 5;                 // % de tolerancia (como el dashboard)
+const TOPE_RAMA = {l: 40, c: 40, sc: 30, f: 150};   // aviso en los primeros árboles
+const VECES_AVISO = 3;                  // aviso si un valor supera 3 veces la media del conteo
+const HORAS_REFRESCO = 6;               // refresco silencioso de la finca (normas)
+
+const K = {
+  sesion: "conteos.sesion", email: "conteos.email",
+  finca: "conteos.finca", datos: "conteos.datos_finca",
+  contadorHoy: "conteos.contador_hoy", nombres: "conteos.nombres",
+  formActivo: "conteos.form_activo", dispositivo: "conteos.dispositivo",
+  vistaParcela: "conteos.vista_parcela"
+};
+const LABOR = {
+  poda:    {txt: "Poda",    valor: "Br/árbol",     corto: "Br/rama", unidad: "br eq.",  bajo: "corto", alto: "largo"},
+  aclareo: {txt: "Aclareo", valor: "Frutos/árbol", corto: "Fr/rama", unidad: "frutos", bajo: "bajo",  alto: "alto"}
+};
+// Colores del dashboard (ControlConteos.tsx)
+const VERDE = "#2d7d3a", GRIS = "#86868b";
+const SUAVE_BAJO = "#c99a4a", BAJO = "#b36b00", SUAVE_ALTO = "#cc7b7b", ALTO = "#a83a3a";
+const FONDO_BAJO = "#e9cf9f", FONDO_ALTO = "#e8b4b4";
+const PALETA = ["#2e6b2e", "#4f8f45", "#86b36a", "#bfd27a", "#ecd36a", "#eeac4e", "#e07b45", "#c0443e"];
+const GRIS_Q = "#c4c7c1";
+
+// ============================================================================
+// UTILIDADES
+// ============================================================================
+const $ = id => document.getElementById(id);
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function lsGet(k, def){ try{ const v = localStorage.getItem(k); return v == null ? def : JSON.parse(v); } catch(e){ return def; } }
+function lsSet(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
+function uuid(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16); crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+  return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+}
+const esUuid = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || ""));
+function hoyISO(){ return new Date().toLocaleDateString("sv-SE"); }
+function ahoraISO(){ return new Date().toISOString(); }
+function fechaCorta(f){ if(!f) return "—"; const [y, m, d] = String(f).slice(0, 10).split("-"); return d + "/" + m + "/" + y.slice(2); }
+function fmt(n, d){ if(n == null || !isFinite(n)) return "—"; const dd = d == null ? 1 : d; return Number(n).toLocaleString("es-ES", {minimumFractionDigits: dd, maximumFractionDigits: dd}); }
+function fmtS(n, d){ if(n == null || !isFinite(n)) return "—"; return (n > 0 ? "+" : n < 0 ? "−" : "") + fmt(Math.abs(n), d); }
+function numONull(v){ if(v === "" || v == null) return null; const n = Number(String(v).replace(",", ".")); return isFinite(n) ? n : null; }
+function entero(v){ const n = parseInt(v, 10); return isFinite(n) ? n : 0; }
+function dispositivo(){ let d = lsGet(K.dispositivo, null); if(!d){ d = "D-" + uuid().slice(0, 8); lsSet(K.dispositivo, d); } return d; }
+function contadorHoy(){ const c = lsGet(K.contadorHoy, null); return c && c.fecha === hoyISO() ? c.nombre : null; }
+
+let _toastT = null;
+function aviso(msg){
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.toggle("bajo", $("teclado").style.display !== "block");
+  t.classList.add("on");
+  clearTimeout(_toastT);
+  _toastT = setTimeout(() => t.classList.remove("on"), 2800);
+}
+function modal(opts){
+  return new Promise(res => {
+    const prev = $("modal");
+    if(prev) prev.remove();
+    const v = document.createElement("div");
+    v.id = "modal"; v.className = "modal";
+    v.innerHTML = '<div class="modal-caja' + (opts.rojo ? " rojo" : "") + '"><div class="modal-t">' + esc(opts.titulo || "") + '</div>' +
+      '<div class="modal-m">' + (opts.html || "") + '</div>' +
+      (opts.botones || []).map((b, i) => '<button data-i="' + i + '" style="background:' + (b.color || "#0b6e4f") + '">' + esc(b.texto) + '</button>').join("") + '</div>';
+    document.body.appendChild(v);
+    const fin = val => { v.remove(); res(val); };
+    v.querySelectorAll("button[data-i]").forEach(b => { b.onclick = () => fin(typeof opts.botones[+b.dataset.i].valor === "function" ? opts.botones[+b.dataset.i].valor(v) : opts.botones[+b.dataset.i].valor); });
+    v.onclick = e => { if(e.target === v) fin(opts.alCerrar === undefined ? null : opts.alCerrar); };
+    const inp = v.querySelector("input");
+    if(inp) setTimeout(() => inp.focus(), 80);
+  });
+}
+function pregunta(titulo, html, ok, cancel, peligro){
+  return modal({titulo, html, alCerrar: false, botones: [
+    {texto: ok || "Aceptar", color: peligro ? ALTO : "#0b6e4f", valor: true},
+    {texto: cancel || "Cancelar", color: "#8a9299", valor: false}]});
+}
+function alerta(titulo, html){ return modal({titulo, html, alCerrar: true, botones: [{texto: "Entendido", valor: true}]}); }
+function abrirHoja(html){ $("hoja").innerHTML = html; $("velo").classList.add("on"); }
+function cerrarHoja(){ $("velo").classList.remove("on"); }
+
+// ============================================================================
+// SESIÓN (se renueva sola; el campo nunca se bloquea por la sesión)
+// ============================================================================
+function sesion(){ return lsGet(K.sesion, null); }
+function guardarSesion(d, email){
+  const ant = sesion() || {};
+  lsSet(K.sesion, {
+    access_token: d.access_token, refresh_token: d.refresh_token || ant.refresh_token,
+    expires_at: d.expires_at || (Math.floor(Date.now() / 1000) + (d.expires_in || 3600)),
+    email: (d.user && d.user.email) || email || ant.email || ""
+  });
+}
+let _renovando = null;
+async function tokenVigente(){
+  const s = sesion();
+  if(!s || !s.access_token) return null;
+  if(s.expires_at * 1000 > Date.now() + 60000) return s.access_token;
+  if(!s.refresh_token || !navigator.onLine) return null;
+  if(_renovando) return _renovando;
+  _renovando = (async () => {
+    try{
+      const r = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=refresh_token", {
+        method: "POST", headers: {apikey: SUPABASE_KEY, "Content-Type": "application/json"},
+        body: JSON.stringify({refresh_token: s.refresh_token})});
+      if(!r.ok) return null;
+      const d = await r.json(); guardarSesion(d); return d.access_token;
+    } catch(e){ return null; }
+    finally { setTimeout(() => { _renovando = null; }, 0); }
+  })();
+  return _renovando;
+}
+let _loginRes = null;
+function pedirLogin(motivo){
+  return new Promise(res => {
+    _loginRes = res;
+    $("login-motivo").textContent = motivo || "Con la cuenta de campo.";
+    $("login-email").value = lsGet(K.email, EMAIL_DEFECTO);
+    $("login-pass").value = "";
+    $("login-error").style.display = "none";
+    $("login").style.display = "flex";
+    setTimeout(() => $("login-pass").focus(), 100);
+  });
+}
+async function hacerLogin(){
+  const email = $("login-email").value.trim(), pass = $("login-pass").value, err = $("login-error"), btn = $("login-entrar");
+  err.style.display = "none";
+  if(!navigator.onLine){ err.textContent = "Sin conexión."; err.style.display = "block"; return; }
+  btn.disabled = true; btn.textContent = "Entrando…";
+  try{
+    const r = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+      method: "POST", headers: {apikey: SUPABASE_KEY, "Content-Type": "application/json"}, body: JSON.stringify({email, password: pass})});
+    const txt = await r.text();
+    if(!r.ok) throw new Error(r.status === 400 ? "Correo o contraseña incorrectos." : "No se pudo entrar (" + r.status + ").");
+    guardarSesion(JSON.parse(txt), email);
+    lsSet(K.email, email);
+    $("login").style.display = "none";
+    const res = _loginRes; _loginRes = null;
+    if(res) res(true);
+  } catch(e){ err.textContent = e.message; err.style.display = "block"; }
+  finally { btn.disabled = false; btn.textContent = "Entrar"; }
+}
+function cancelarLogin(){ $("login").style.display = "none"; const res = _loginRes; _loginRes = null; if(res) res(false); }
+async function conToken(motivo){
+  let t = await tokenVigente();
+  if(t) return t;
+  if(!navigator.onLine) throw new Error("Sin conexión");
+  if(!await pedirLogin(motivo || "La sesión ha caducado. Vuelve a entrar con la cuenta de campo.")) throw new Error("No has entrado");
+  t = await tokenVigente();
+  if(!t) throw new Error("No se pudo iniciar la sesión");
+  return t;
+}
+async function rpc(fn, args){
+  const t = await conToken();
+  const r = await fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
+    method: "POST",
+    headers: {apikey: SUPABASE_KEY, Authorization: "Bearer " + t, "Content-Type": "application/json", "Content-Profile": ESQUEMA, "Accept-Profile": ESQUEMA},
+    body: JSON.stringify(args || {})
+  });
+  const txt = await r.text();
+  if(r.status === 401){ const s = sesion(); if(s){ s.expires_at = 0; lsSet(K.sesion, s); } throw new Error("La sesión ha caducado. Vuelve a intentarlo."); }
+  if(!r.ok){
+    let m = txt;
+    try{ const j = JSON.parse(txt); m = j.message || j.hint || txt; } catch(e){}
+    throw new Error(m.slice(0, 300));
+  }
+  return txt ? JSON.parse(txt) : null;
+}
+
+// ============================================================================
+// DATOS DEL MÓVIL (IndexedDB)
+// ============================================================================
+let _db = null;
+const DATOS = {forms: [], arboles: []};
+function dbAbrir(){
+  if(_db) return Promise.resolve(_db);
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open("conteos.datos", 1);
+    rq.onupgradeneeded = e => {
+      const db = e.target.result;
+      if(!db.objectStoreNames.contains("formularios")) db.createObjectStore("formularios", {keyPath: "id_local"});
+      if(!db.objectStoreNames.contains("arboles")){ const s = db.createObjectStore("arboles", {keyPath: "id_local"}); s.createIndex("form", "form_id"); }
+    };
+    rq.onsuccess = e => { _db = e.target.result; res(_db); };
+    rq.onerror = e => rej(e.target.error);
+  });
+}
+async function dbTx(stores, modo, fn){
+  const db = await dbAbrir();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(stores, modo);
+    let out; const rq = fn(tx);
+    if(rq) rq.onsuccess = () => { out = rq.result; };
+    tx.oncomplete = () => res(out);
+    tx.onerror = () => rej(tx.error);
+    tx.onabort = () => rej(tx.error || new Error("Operación cancelada"));
+  });
+}
+const dbPut = (s, o) => dbTx([s], "readwrite", tx => tx.objectStore(s).put(o));
+const dbDel = (s, k) => dbTx([s], "readwrite", tx => tx.objectStore(s).delete(k));
+const dbAll = s => dbTx([s], "readonly", tx => tx.objectStore(s).getAll());
+function dbBorrarForm(id){
+  return dbTx(["formularios", "arboles"], "readwrite", tx => {
+    tx.objectStore("formularios").delete(id);
+    const rq = tx.objectStore("arboles").index("form").openCursor(IDBKeyRange.only(id));
+    rq.onsuccess = e => { const c = e.target.result; if(c){ c.delete(); c.continue(); } };
+    return null;
+  });
+}
+async function cargarDatos(){
+  DATOS.forms = await dbAll("formularios") || [];
+  DATOS.arboles = await dbAll("arboles") || [];
+  // Datos de la v1a: se les dan identificadores uuid para poder subirlos
+  for(const f of DATOS.forms){
+    let cambio = false;
+    if(!esUuid(f.uuid)){ f.uuid = esUuid(f.id_local) ? f.id_local : uuid(); cambio = true; }
+    if(!esUuid(f.version_id)){ f.version_id = uuid(); cambio = true; }
+    if(!f.norma || f.norma.arbol_min !== undefined){ const n = f.norma || {}; f.norma = {min: numONull(n.arbol_min !== undefined ? n.arbol_min : n.min), max: numONull(n.arbol_max !== undefined ? n.arbol_max : n.max)}; cambio = true; }
+    if(cambio) await dbPut("formularios", f);
+  }
+  for(const a of DATOS.arboles){
+    if(!esUuid(a.uuid)){ a.uuid = esUuid(a.id_local) ? a.id_local : uuid(); await dbPut("arboles", a); }
+  }
+}
+// sinVersion: no marca el conteo como cambiado (lo usa la subida)
+async function guardarForm(f, sinVersion){
+  if(!sinVersion){
+    f.modificado = ahoraISO();
+    if(f.subido && f.subido.version_id === f.version_id) f.version_id = uuid();
+  }
+  await dbPut("formularios", f);
+  const i = DATOS.forms.findIndex(x => x.id_local === f.id_local);
+  if(i >= 0) DATOS.forms[i] = f; else DATOS.forms.push(f);
+  pintarBadge();
+}
+async function guardarArbolBD(a){
+  await dbPut("arboles", a);
+  const i = DATOS.arboles.findIndex(x => x.id_local === a.id_local);
+  if(i >= 0) DATOS.arboles[i] = a; else DATOS.arboles.push(a);
+}
+async function borrarArbolBD(id){ await dbDel("arboles", id); DATOS.arboles = DATOS.arboles.filter(a => a.id_local !== id); }
+function formPorId(id){ return DATOS.forms.find(f => f.id_local === id) || null; }
+function arbolesDe(id){ return DATOS.arboles.filter(a => a.form_id === id).sort((a, b) => a.n_orden - b.n_orden); }
+function formsFinca(){ const c = lsGet(K.finca, null); return c ? DATOS.forms.filter(f => f.finca_codigo === c) : []; }
+function formActivo(){ const id = lsGet(K.formActivo, null); const f = id ? formPorId(id) : null; return f && f.estado === "abierto" ? f : null; }
+function pendienteSubir(f){ return arbolesDe(f.id_local).length > 0 && !(f.subido && f.subido.version_id === f.version_id); }
+function nPendientes(){ return formsFinca().filter(pendienteSubir).length; }
+
+// ============================================================================
+// FINCA (datos de labores.app_datos_finca)
+// ============================================================================
+function datosFinca(){ return lsGet(K.datos, null); }
+function fincaCodigo(){ return lsGet(K.finca, null); }
+function anillo(geo){
+  if(!geo) return null;
+  if(typeof geo === "string"){ try{ geo = JSON.parse(geo); } catch(e){ return null; } }
+  if(geo.type === "Feature") geo = geo.geometry;
+  if(geo.type === "Polygon" && geo.coordinates && geo.coordinates[0]) return geo.coordinates[0];
+  if(geo.type === "MultiPolygon" && geo.coordinates){ let m = null; geo.coordinates.forEach(p => { if(p[0] && (!m || p[0].length > m.length)) m = p[0]; }); return m; }
+  return null;
+}
+let _polis = null, _polisTs = null;
+function poligonos(){
+  const d = datosFinca();
+  if(!d) return {};
+  if(_polis && _polisTs === d.ts) return _polis;
+  _polis = {};
+  (d.parcelas || []).forEach(p => { const a = anillo(p.geojson); if(a && a.length >= 3) _polis[p.codigo] = a.map(c => [Number(c[0]), Number(c[1])]); });
+  _polisTs = d.ts;
+  return _polis;
+}
+function infoParcela(cod){ const d = datosFinca(); return d ? (d.parcelas || []).find(p => p.codigo === cod) || null : null; }
+function normaBD(cod, tipo){ const p = infoParcela(cod); const n = p && p.norma ? p.norma[tipo] : null; return n && (n.min != null || n.max != null) ? n : null; }
+function claveGeom(poly){ return JSON.stringify(poly.map(p => [Math.round(p[0] * 1e6), Math.round(p[1] * 1e6)])); }
+function prefijoComun(cods){
+  if(cods.length === 1) return cods[0];
+  const r = cods.map(c => c.replace(/[A-Z]$/, ""));
+  return r.every(x => x === r[0]) && r[0] ? r[0] : cods.join("/");
+}
+function gruposParcelas(){
+  const g = {};
+  Object.entries(poligonos()).forEach(([cod, poly]) => { const k = claveGeom(poly); if(!g[k]) g[k] = {cods: [], poly}; g[k].cods.push(cod); });
+  return Object.values(g).map(x => { x.cods.sort(); x.nombre = prefijoComun(x.cods); return x; });
+}
+function pintarCabecera(){
+  const d = datosFinca();
+  $("cab-finca").textContent = d && d.finca ? "Conteos · " + d.finca.nombre : "Conteos";
+  $("cab-sub").textContent = new Date().toLocaleDateString("es-ES", {weekday: "long", day: "2-digit", month: "long"}) + (d ? " · campaña " + d.campanya : "");
+  const c = contadorHoy(), ch = $("chip-contador");
+  ch.style.display = d ? "" : "none";
+  ch.textContent = "👤 " + (c || "¿quién?");
+}
+function pintarBadge(){ const n = nPendientes(); $("badge-sub").innerHTML = n ? '<span class="badge">' + n + '</span>' : ""; }
+
+// Descarga la finca. silencioso: sin ventanas (refresco automático de normas)
+async function descargarFinca(codigo, silencioso){
+  const antes = datosFinca();
+  const d = await rpc("app_datos_finca", {p_finca: codigo});
+  if(!d || !d.parcelas || !d.parcelas.length) throw new Error("La base no devuelve parcelas con plano para esta finca.");
+  d.ts = Date.now();
+  lsSet(K.datos, d);
+  lsSet(K.finca, codigo);
+  _polis = null;
+  // Aviso de normas nuevas o cambiadas
+  if(antes && antes.finca && antes.finca.codigo === codigo){
+    const cambios = [];
+    d.parcelas.forEach(p => ["poda", "aclareo"].forEach(t => {
+      const a = (antes.parcelas.find(x => x.codigo === p.codigo) || {norma: {}}).norma || {};
+      const n = (p.norma || {})[t], o = a[t];
+      const k = x => x ? x.min + "-" + x.max : "";
+      if(k(n) !== k(o) && n) cambios.push(p.codigo + " · " + LABOR[t].txt.toLowerCase() + ": " + textoRango(n.min, n.max));
+    }));
+    if(cambios.length) setTimeout(() => alerta("Norma actualizada", cambios.map(esc).join("<br>")), silencioso ? 600 : 0);
+  }
+  pintarCabecera();
+  return d;
+}
+async function refrescoSilencioso(){
+  const d = datosFinca();
+  if(!d || !navigator.onLine || Date.now() - (d.ts || 0) < HORAS_REFRESCO * 3600000) return;
+  if(!await tokenVigente()) return;
+  try{ await descargarFinca(d.finca.codigo, true); } catch(e){ console.warn("Refresco de la finca:", e.message); }
+}
+
+// ============================================================================
+// GEOMETRÍA Y POSICIÓN
+// ============================================================================
+function puntoEnPoligono(lon, lat, poly){
+  let d = false;
+  for(let i = 0, j = poly.length - 1; i < poly.length; j = i++){
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if(((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) d = !d;
+  }
+  return d;
+}
+function distanciaAPoligonoM(lon, lat, poly){
+  const kx = 111320 * Math.cos(lat * Math.PI / 180), ky = 110540;
+  let min = Infinity;
+  for(let i = 0, j = poly.length - 1; i < poly.length; j = i++){
+    const ax = (poly[j][0] - lon) * kx, ay = (poly[j][1] - lat) * ky, bx = (poly[i][0] - lon) * kx, by = (poly[i][1] - lat) * ky;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    let t = l2 > 0 ? -(ax * dx + ay * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+    min = Math.min(min, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return min;
+}
+function parcelasEn(g){ if(!g) return []; return Object.entries(poligonos()).filter(([, p]) => puntoEnPoligono(g.lon, g.lat, p)).map(([c]) => c).sort(); }
+function evaluarPosicion(parcela, g){
+  if(!g || g.lat == null || g.prec > PRECISION_MAX_M) return {estado: "sin_gps"};
+  const polis = poligonos(), poly = polis[parcela];
+  if(!poly) return {estado: "sin_poligono"};
+  if(puntoEnPoligono(g.lon, g.lat, poly)) return {estado: "dentro"};
+  const dist = Math.round(distanciaAPoligonoM(g.lon, g.lat, poly));
+  if(dist <= Math.min(MARGEN_MAX_M, Math.max(MARGEN_MIN_M, g.prec || 0))) return {estado: "margen", dist};
+  const otras = parcelasEn(g).filter(c => c !== parcela && claveGeom(polis[c]) !== claveGeom(poly));
+  return otras.length ? {estado: "otra", dist, otra: otras.join(" / ")} : {estado: "lejos", dist};
+}
+
+// ============================================================================
+// GPS
+// ============================================================================
+const S = {gps: null, gpsWatch: null, cap: null, nuevo: null, vista: "contar", confLejos: {}, mapa: null, mapaGPS: null, tecnico: false, subiendo: false};
+function iniciarGPS(manual){
+  if(!navigator.geolocation){ if(manual) aviso("Este dispositivo no tiene GPS"); return; }
+  if(S.gpsWatch != null){ if(manual && S.gps) aviso("GPS ±" + S.gps.prec + " m"); if(!manual) return; try{ navigator.geolocation.clearWatch(S.gpsWatch); } catch(e){} }
+  pintarChipGPS("buscando");
+  S.gpsWatch = navigator.geolocation.watchPosition(onGPS, err => {
+    pintarChipGPS("error");
+    if(manual || err.code === 1) aviso("GPS: " + (err.code === 1 ? "permiso denegado. Autoriza la ubicación en los ajustes." : err.code === 2 ? "activa la ubicación del móvil." : "sin señal todavía."));
+  }, {enableHighAccuracy: true, maximumAge: 5000, timeout: 60000});
+}
+function onGPS(pos){
+  S.gps = {lat: pos.coords.latitude, lon: pos.coords.longitude, prec: Math.round(pos.coords.accuracy), ts: Date.now()};
+  pintarChipGPS("ok");
+  const cap = S.cap;
+  if(cap && cap.iniciado && !cap.edit && (!cap.gps || S.gps.prec < cap.gps.prec)) cap.gps = Object.assign({}, S.gps);
+  if(S.vista === "contar"){ if(formActivo()){ pintarGPSArbol(); pintarFranja(); } else pintarSugerencia(); }
+  if(S.vista === "parcela") pintarGPSMapa();
+}
+function pintarChipGPS(e){
+  const c = $("chip-gps");
+  if(e === "ok" && S.gps){ c.textContent = "📍 ±" + S.gps.prec + " m"; c.className = "chip " + (S.gps.prec <= 15 ? "ok" : ""); }
+  else if(e === "buscando"){ c.textContent = "📍 …"; c.className = "chip"; }
+  else if(e === "error"){ c.textContent = "📍 Sin GPS"; c.className = "chip mal"; }
+}
+function pintarRed(){
+  const c = $("chip-red");
+  if(navigator.onLine){ c.textContent = "En línea"; c.className = "chip ok"; c.style.animation = ""; }
+  else { c.textContent = "Sin red"; c.className = "chip mal"; c.style.animation = "pulso 2s infinite"; }
+}
+
+// ============================================================================
+// CÁLCULOS, NORMA Y COLORES (mismas reglas que el dashboard)
+// ============================================================================
+function columnas(f){ return f.tipo === "poda" ? ["l", "c", "sc"] : ["f"]; }
+function brEq(f, l, c, sc){ return l + c / 2 + sc / (f.ciruelo ? 5 : 4); }
+function calcArbol(f, a){
+  const ramas = a.sin_ramas ? [] : (a.ramas || []);
+  if(f.tipo === "poda"){
+    let L = 0, C = 0, Sc = 0, nR = 0;
+    ramas.forEach(r => { const l = entero(r.l), c = entero(r.c), sc = entero(r.sc); L += l; C += c; Sc += sc; if(l + c + sc > 0) nR++; });
+    const v = brEq(f, L, C, Sc);
+    return {L, C, Sc, nR, valor: v, porRama: nR ? v / nR : null, pctLargos: (L + C + Sc) ? L / (L + C + Sc) * 100 : null};
+  }
+  let F = 0, nR = 0;
+  ramas.forEach(r => { const x = entero(r.f); F += x; if(x > 0) nR++; });
+  const b = a.br, eq = b ? brEq(f, entero(b.l), entero(b.c), entero(b.sc)) : null;
+  const tot = b ? entero(b.l) + entero(b.c) + entero(b.sc) : 0;
+  return {F, nR, valor: F, porRama: nR ? F / nR : null, L: b ? entero(b.l) : null, C: b ? entero(b.c) : null, Sc: b ? entero(b.sc) : null,
+    eq, frutosBr: eq ? F / eq : null, pctLargos: tot ? entero(b.l) / tot * 100 : null};
+}
+function rango(min, max){
+  let a = numONull(min), b = numONull(max);
+  if(a == null && b == null) return null;
+  if(a == null) a = b; if(b == null) b = a;
+  if(a > b) [a, b] = [b, a];
+  return b > 0 ? [a, b] : null;
+}
+function textoRango(min, max){ const r = rango(min, max); return !r ? "—" : r[0] === r[1] ? fmt(r[0], 0) : fmt(r[0], 0) + "–" + fmt(r[1], 0); }
+// Estado, desvío desde el límite más cercano y grado 0-3
+function grado(v, n){
+  const r = n ? rango(n.min, n.max) : null;
+  if(v == null || !isFinite(v) || !r) return null;
+  const [a, b] = r;
+  if(v >= a && v <= b) return {g: 0, abajo: false, desvio: 0, t: 0};
+  const abajo = v < a, lim = abajo ? a : b, desvio = v - lim, t = 100 * Math.abs(desvio) / lim;
+  return {g: t <= MARGEN_NORMA ? 1 : t <= 2 * MARGEN_NORMA ? 2 : 3, abajo, desvio, t};
+}
+function colorGrado(gr){ if(!gr) return GRIS; if(gr.g === 0) return VERDE; return gr.abajo ? (gr.g === 1 ? SUAVE_BAJO : BAJO) : (gr.g === 1 ? SUAVE_ALTO : ALTO); }
+function textoGrado(gr, tipo){
+  if(!gr) return "sin norma";
+  if(gr.g === 0) return "en norma";
+  const L = LABOR[tipo || "poda"];
+  return (gr.abajo ? L.bajo : L.alto) + " " + fmt(gr.t, 0) + " %";
+}
+function colorCalidad(q){
+  if(q == null) return GRIS_Q;
+  const e = [[90, 0], [80, 1], [70, 2], [60, 3], [50, 4], [40, 5], [30, 6]];
+  for(const [d, i] of e) if(q >= d) return PALETA[i];
+  return PALETA[7];
+}
+// Indicadores de un grupo de árboles (conteo, zona…)
+function grupo(f, as, norma, excluirPocasRamas){
+  const filas = as.map(a => ({a, c: calcArbol(f, a)})).filter(x => !(excluirPocasRamas && x.c.nR <= 3));
+  const n = filas.length;
+  const media = k => { const v = filas.map(x => x.c[k]).filter(x => x != null && isFinite(x)); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+  const grs = filas.map(x => grado(x.c.valor, norma)).filter(Boolean);
+  const conN = grs.length;
+  const desvMedio = conN ? grs.reduce((s, g) => s + g.desvio, 0) / conN : null;
+  const desvAbs = conN ? grs.reduce((s, g) => s + Math.abs(g.desvio), 0) / conN : null;
+  const r = norma ? rango(norma.min, norma.max) : null;
+  let colorMedia = GRIS;
+  if(r && desvAbs != null){
+    const t = 100 * desvAbs / ((r[0] + r[1]) / 2);
+    colorMedia = t <= MARGEN_NORMA / 2 ? VERDE : desvMedio < 0 ? (t <= MARGEN_NORMA ? SUAVE_BAJO : BAJO) : (t <= MARGEN_NORMA ? SUAVE_ALTO : ALTO);
+  }
+  return {
+    n, valor: media("valor"), porRama: media("porRama"), nR: media("nR"), pctLargos: media("pctLargos"), frutosBr: media("frutosBr"),
+    conNorma: conN, pctNorma: conN ? grs.filter(g => g.g === 0).length / conN * 100 : null,
+    pctMargen: conN ? grs.filter(g => g.g <= 1).length / conN * 100 : null,
+    desvMedio, desvAbs, colorMedia
+  };
+}
+function textoDesvio(gr, tipo){
+  if(gr.desvMedio == null) return "—";
+  if(Math.abs(gr.desvMedio) < 0.05) return "en norma";
+  const L = LABOR[tipo];
+  return (gr.desvMedio < 0 ? "↓ " + L.bajo : "↑ " + L.alto) + " " + fmt(Math.abs(gr.desvMedio), 1);
+}
+function normaDe(f){ return f.norma && rango(f.norma.min, f.norma.max) ? f.norma : null; }
+
+// Barra de la norma: banda verde, márgenes del 5 %, un trazo por árbol y la media
+function barraNorma(f, as){
+  const n = normaDe(f);
+  if(!n) return '<div style="font-size:12px;color:#8b9295;margin-top:8px">Sin norma para comparar.</div>';
+  const [a, b] = rango(n.min, n.max);
+  const vals = as.map(x => calcArbol(f, x).valor);
+  let lo = a * 0.8, hi = b * 1.2;
+  vals.forEach(v => { if(v < lo) lo = Math.max(0, v - (b - a) * 0.2); if(v > hi) hi = v + (b - a) * 0.2; });
+  const pos = v => Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100));
+  let h = '<div class="barra-norma"><div class="eje"></div>' +
+    '<div class="banda" style="left:' + pos(a * 0.95) + '%;width:' + (pos(a) - pos(a * 0.95)) + '%;background:' + FONDO_BAJO + '"></div>' +
+    '<div class="banda" style="left:' + pos(a) + '%;width:' + (pos(b) - pos(a)) + '%;background:#bfe0c4"></div>' +
+    '<div class="banda" style="left:' + pos(b) + '%;width:' + (pos(b * 1.05) - pos(b)) + '%;background:' + FONDO_ALTO + '"></div>';
+  as.forEach(x => { const c = calcArbol(f, x); h += '<div class="tick" style="left:' + pos(c.valor) + '%;background:' + colorGrado(grado(c.valor, n)) + ';opacity:' + (c.nR <= 3 ? .35 : .9) + '"></div>'; });
+  const g = grupo(f, as, n);
+  if(g.valor != null) h += '<div class="media" style="left:' + pos(g.valor) + '%">' + fmt(g.valor, 0) + '<i></i></div>';
+  h += '<div class="lim" style="left:' + pos(a) + '%">' + fmt(a, 0) + '</div>' + (b !== a ? '<div class="lim" style="left:' + pos(b) + '%">' + fmt(b, 0) + '</div>' : '') + '</div>';
+  return h;
+}
+function tira(f, as){
+  const n = normaDe(f);
+  return '<div class="tira">' + as.map(x => { const c = calcArbol(f, x); return '<span onclick="event.stopPropagation();fichaArbol(\'' + x.id_local + '\')" title="Nº ' + x.n_orden + '" style="background:' + colorGrado(grado(c.valor, n)) + ';opacity:' + (c.nR <= 3 ? .35 : 1) + '"></span>'; }).join("") + '</div>';
+}
+
+// ============================================================================
+// NAVEGACIÓN
+// ============================================================================
+function ir(v){
+  if(v !== "config") S.tecnico = false;
+  S.vista = v;
+  ["contar", "parcela", "conteos", "config"].forEach(x => { $("v-" + x).style.display = x === v ? "block" : "none"; $("t-" + x).className = (x === v ? "on" : "") + (x === "config" ? " cfg" : ""); });
+  if(v !== "contar") mostrarTeclado(false);
+  if(v === "contar") pintarContar();
+  if(v === "parcela") pintarParcela();
+  if(v === "conteos") pintarConteos();
+  if(v === "config") pintarConfig();
+  window.scrollTo(0, 0);
+}
+
+// ============================================================================
+// QUIÉN CUENTA HOY
+// ============================================================================
+async function pedirContador(cambiar){
+  const recientes = lsGet(K.nombres, []);
+  const html = '<div>Escribe tu nombre o elígelo:</div>' +
+    (recientes.length ? '<div class="nombres">' + recientes.slice(0, 8).map((n, i) => '<button type="button" data-n="' + i + '">' + esc(n) + '</button>').join("") + '</div>' : '') +
+    '<input id="m-nombre" placeholder="Nombre y apellido" autocomplete="off" style="margin-top:10px">';
+  const p = modal({titulo: cambiar ? "¿Quién cuenta?" : "¿Quién cuenta hoy?", html, alCerrar: null,
+    botones: [{texto: "Empezar", valor: v => (v.querySelector("#m-nombre").value || "").trim()}]});
+  setTimeout(() => document.querySelectorAll("#modal .nombres button").forEach(b => { b.onclick = () => { $("m-nombre").value = recientes[+b.dataset.n]; }; }), 30);
+  const nombre = await p;
+  if(!nombre){ if(!contadorHoy()) aviso("Indica quién cuenta"); return null; }
+  lsSet(K.contadorHoy, {fecha: hoyISO(), nombre});
+  lsSet(K.nombres, [nombre].concat(recientes.filter(x => x !== nombre)).slice(0, 20));
+  pintarCabecera();
+  if(S.vista === "contar") pintarContar();
+  return nombre;
+}
+
+// ============================================================================
+// CONTAR · NUEVO CONTEO
+// ============================================================================
+function pintarContar(){
+  const c = $("v-contar");
+  if(!datosFinca() || !Object.keys(poligonos()).length){
+    mostrarTeclado(false);
+    c.innerHTML = '<div class="card" style="text-align:center;padding:26px 14px"><div style="font-size:17px;font-weight:800">Este móvil no está configurado</div>' +
+      '<div style="font-size:13px;color:#5b6467;margin:6px 0 14px">El técnico tiene que elegir la finca y descargar sus planos (pestaña ⚙).</div>' +
+      '<button class="btn" style="width:100%" onclick="ir(\'config\')">Configuración</button></div>';
+    return;
+  }
+  if(!contadorHoy()){
+    mostrarTeclado(false);
+    c.innerHTML = '<div class="card" style="text-align:center;padding:26px 14px"><div style="font-size:17px;font-weight:800">¿Quién cuenta hoy?</div>' +
+      '<button class="btn" style="width:100%;margin-top:14px" onclick="pedirContador()">Indicar nombre</button></div>';
+    setTimeout(() => { if(!contadorHoy() && !$("modal")) pedirContador(); }, 150);
+    return;
+  }
+  const f = formActivo();
+  if(f){ pintarCaptura(f); return; }
+  mostrarTeclado(false);
+  pintarNuevo();
+}
+function pintarNuevo(){
+  if(!S.nuevo) S.nuevo = {tipo: "poda", parcela: "", normaEdit: null};
+  const n = S.nuevo, L = LABOR[n.tipo];
+  const abiertos = formsFinca().filter(f => f.estado === "abierto").sort((a, b) => (b.modificado || "").localeCompare(a.modificado || ""));
+  let h = "";
+  if(abiertos.length){
+    h += '<h2>Conteos abiertos</h2>';
+    abiertos.forEach(f => {
+      const as = arbolesDe(f.id_local);
+      h += '<div class="card form-item abierto" onclick="continuarForm(\'' + f.id_local + '\')" style="cursor:pointer">' +
+        '<div class="h"><b>' + esc(f.parcela) + ' · ' + LABOR[f.tipo].txt + '</b><span style="font-size:13px;color:#0b6e4f;font-weight:700">Continuar →</span></div>' +
+        '<div class="i">' + fechaCorta(f.fecha) + ' · ' + as.length + ' árbol(es) · ' + esc(f.contador || "") + '</div>' + tira(f, as) + '</div>';
+    });
+  }
+  h += '<h2>Nuevo conteo</h2><div class="card">' +
+    '<div class="seg"><button class="' + (n.tipo === "poda" ? "on" : "") + '" onclick="cambiarNuevo(\'tipo\',\'poda\')">Poda</button>' +
+    '<button class="' + (n.tipo === "aclareo" ? "on" : "") + '" onclick="cambiarNuevo(\'tipo\',\'aclareo\')">Aclareo</button></div>' +
+    '<div id="sug-parcela"></div>' +
+    '<select class="grande" style="margin-top:10px" onchange="cambiarNuevo(\'parcela\',this.value)"><option value="">- Elige parcela -</option>' +
+      Object.keys(poligonos()).sort().map(p => '<option value="' + esc(p) + '"' + (p === n.parcela ? " selected" : "") + '>' + esc(p) + '</option>').join("") + '</select>';
+  if(n.parcela){
+    const ip = infoParcela(n.parcela) || {};
+    const nb = normaBD(n.parcela, n.tipo), ne = n.normaEdit;
+    const usada = ne || nb;
+    h += '<div class="info-parc">' + (ip.variedad ? 'Variedad <b>' + esc(ip.variedad) + '</b>' : '') + (ip.ciruelo ? '<span class="tag">ciruelo · Sc ÷ 5</span>' : '') + (ip.madre && ip.madre !== n.parcela ? ' · madre ' + esc(ip.madre) : '') + '<br>' +
+      'Norma: <b>' + (usada ? textoRango(usada.min, usada.max) + ' ' + L.valor.toLowerCase() : 'sin norma') + '</b>' +
+      (ne ? '<span class="tag edit">editada en campo</span>' : nb ? ' <span style="color:#8b9295">(de la base)</span>' : '') +
+      ' · <button class="enlace" onclick="editarNormaNuevo()">' + (usada ? "Cambiar" : "Poner norma") + '</button></div>';
+  }
+  h += '<button class="btn" style="width:100%;margin-top:14px;font-size:17px;padding:15px" onclick="empezarConteo()">Empezar conteo</button></div>';
+  $("v-contar").innerHTML = h;
+  pintarSugerencia();
+}
+function cambiarNuevo(k, v){ S.nuevo[k] = v; S.nuevo.normaEdit = null; pintarNuevo(); }
+function pintarSugerencia(){
+  const el = $("sug-parcela");
+  if(!el || !S.nuevo) return;
+  const det = parcelasEn(S.gps);
+  if(!det.length || det.includes(S.nuevo.parcela)){ el.innerHTML = ""; return; }
+  el.innerHTML = '<div class="aviso-gps" style="background:#1b5e9e;color:#fff"><div><div style="font-size:12px;opacity:.9">📍 El GPS te sitúa en</div><div style="font-size:20px;font-weight:800">' + esc(prefijoComun(det)) + '</div></div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' +
+    det.map(c => '<button onclick="cambiarNuevo(\'parcela\',\'' + esc(c) + '\')" style="padding:10px 14px;border:none;border-radius:8px;background:#fff;color:#1b5e9e;font-size:15px;font-weight:800;cursor:pointer">' + (det.length === 1 ? "Usar" : esc(c)) + '</button>').join("") + '</div></div>';
+}
+async function pedirNorma(tipo, actual){
+  const L = LABOR[tipo];
+  const r = await modal({titulo: "Norma de " + L.txt.toLowerCase(), alCerrar: null,
+    html: L.valor + ': desde y hasta. Queda marcada como <b>editada en campo</b>.' +
+      '<div style="display:flex;gap:8px;margin-top:8px"><input id="m-nmin" type="number" inputmode="numeric" placeholder="desde" value="' + (actual && actual.min != null ? actual.min : "") + '">' +
+      '<input id="m-nmax" type="number" inputmode="numeric" placeholder="hasta" value="' + (actual && actual.max != null ? actual.max : "") + '"></div>',
+    botones: [{texto: "Guardar norma", valor: v => ({min: numONull(v.querySelector("#m-nmin").value), max: numONull(v.querySelector("#m-nmax").value)})},
+      {texto: "Cancelar", color: "#8a9299", valor: null}]});
+  if(!r) return null;
+  if(!rango(r.min, r.max)){ aviso("Indica al menos un valor"); return null; }
+  const [a, b] = rango(r.min, r.max);
+  return {min: a, max: b};
+}
+async function editarNormaNuevo(){
+  const n = S.nuevo;
+  const r = await pedirNorma(n.tipo, n.normaEdit || normaBD(n.parcela, n.tipo));
+  if(r){ n.normaEdit = r; pintarNuevo(); }
+}
+async function editarNormaConteo(){
+  const f = formActivo();
+  if(!f) return;
+  const r = await pedirNorma(f.tipo, f.norma);
+  if(!r) return;
+  f.norma = r; f.norma_editada = true;
+  await guardarForm(f);
+  pintarCaptura(f);
+}
+async function empezarConteo(){
+  iniciarGPS(false);
+  const n = S.nuevo, d = datosFinca();
+  if(!n.parcela){ aviso("Elige la parcela"); return; }
+  const ev = evaluarPosicion(n.parcela, S.gps);
+  if(ev.estado === "otra"){
+    const ok = await pregunta("¿Parcela correcta?", "El GPS te sitúa en <b>" + esc(ev.otra) + "</b>, no en " + esc(n.parcela) + ".", "Empezar en " + n.parcela, "Volver a elegir");
+    if(!ok) return;
+  }
+  const ip = infoParcela(n.parcela) || {}, nb = normaBD(n.parcela, n.tipo);
+  const usada = n.normaEdit || nb;
+  const id = uuid();
+  const f = {
+    id_local: id, uuid: id, version_id: uuid(), tipo: n.tipo, finca_codigo: d.finca.codigo, finca_nombre: d.finca.nombre, campanya: d.campanya,
+    parcela: n.parcela, id_cultivo: ip.id_cultivo || null, variedad: ip.variedad || null, ciruelo: !!ip.ciruelo, madre: ip.madre || null,
+    fecha: hoyISO(), contador: contadorHoy(), dispositivo: dispositivo(),
+    norma: usada ? {min: usada.min, max: usada.max} : {min: null, max: null},
+    norma_original: nb ? {min: nb.min, max: nb.max, origen: nb.origen || "nuestra", actualizado: nb.actualizado || null} : null,
+    norma_editada: !!n.normaEdit, estado: "abierto", creado: ahoraISO(), modificado: ahoraISO(), subido: null, version_app: VERSION
+  };
+  try{ await guardarForm(f); }
+  catch(e){ await alerta("No se pudo guardar", "El móvil no deja guardar datos (" + esc(e.message) + ")."); return; }
+  lsSet(K.formActivo, f.id_local);
+  S.nuevo = {tipo: n.tipo, parcela: "", normaEdit: null};
+  S.cap = nuevaCaptura(f);
+  pintarContar();
+}
+function continuarForm(id){
+  const f = formPorId(id);
+  if(!f) return;
+  if(f.estado !== "abierto"){ f.estado = "abierto"; guardarForm(f); }
+  lsSet(K.formActivo, id);
+  S.cap = nuevaCaptura(f);
+  ir("contar");
+}
+
+// ============================================================================
+// CONTAR · CAPTURA
+// ============================================================================
+function ramaVacia(f){ const o = {}; columnas(f).forEach(k => { o[k] = ""; }); return o; }
+function siguienteOrden(f){ return arbolesDe(f.id_local).reduce((m, a) => Math.max(m, a.n_orden || 0), 0) + 1; }
+function proponerPosicion(f){
+  const as = arbolesDe(f.id_local);
+  if(!as.length) return null;
+  const u = as[as.length - 1];
+  if(as.length >= 2){
+    const p = as[as.length - 2], df = u.fila - p.fila, da = u.arbol - p.arbol;
+    if(df === 0 && da !== 0 && Math.abs(da) <= 20) return {fila: u.fila, arbol: u.arbol + da};
+    if(da === 0 && df !== 0 && Math.abs(df) <= 5) return {fila: u.fila + df, arbol: u.arbol};
+  }
+  return {fila: u.fila, arbol: u.arbol + 1};
+}
+function nuevaCaptura(f){
+  const p = proponerPosicion(f);
+  return {edit: null, fila: {v: p ? String(p.fila) : "", prop: !!p}, arbol: {v: p ? String(p.arbol) : "", prop: !!p}, bateria: {v: "", prop: false},
+    ramas: [ramaVacia(f)], br: {l: "", c: "", sc: ""}, verBr: false,
+    foco: p ? {t: "rama", i: 0, k: columnas(f)[0]} : {t: "fila"}, gps: null, iniciado: false, aceptados: {}};
+}
+function capturaDesde(f, a){
+  const cols = columnas(f);
+  const ramas = (a.ramas || []).map(r => { const o = {}; cols.forEach(k => { o[k] = r[k] == null ? "" : String(r[k]); }); return o; });
+  if(!ramas.length) ramas.push(ramaVacia(f));
+  const b = a.br || {};
+  return {edit: a.id_local, fila: {v: String(a.fila || ""), prop: false}, arbol: {v: String(a.arbol || ""), prop: false},
+    bateria: {v: a.bateria != null ? String(a.bateria) : "", prop: false}, ramas,
+    br: {l: b.l != null ? String(b.l) : "", c: b.c != null ? String(b.c) : "", sc: b.sc != null ? String(b.sc) : ""},
+    verBr: !!a.br, foco: {t: "rama", i: 0, k: cols[0]}, gps: null, iniciado: true, aceptados: {}};
+}
+function arbolDeCaptura(f, cap){
+  const cols = columnas(f);
+  let ult = -1;
+  cap.ramas.forEach((r, i) => { if(cols.some(k => entero(r[k]) > 0)) ult = i; });
+  const ramas = cap.ramas.slice(0, ult + 1).map(r => { const o = {}; cols.forEach(k => { o[k] = entero(r[k]); }); return o; });
+  const hayBr = f.tipo === "aclareo" && ["l", "c", "sc"].some(k => cap.br[k] !== "");
+  return {ramas, sin_ramas: false, br: hayBr ? {l: entero(cap.br.l), c: entero(cap.br.c), sc: entero(cap.br.sc)} : null};
+}
+// Media de una columna en las ramas ya guardadas del conteo (referencia para el aviso de tecleo)
+function refColumna(f, k){
+  const v = [];
+  arbolesDe(f.id_local).forEach(a => (a.ramas || []).forEach(r => { if(columnas(f).some(c => entero(r[c]) > 0)) v.push(entero(r[k])); }));
+  return v.length >= 6 ? v.reduce((s, x) => s + x, 0) / v.length : null;
+}
+function sospecha(f, k, valor){
+  const v = entero(valor);
+  if(!v) return null;
+  const ref = refColumna(f, k);
+  if(ref != null && ref > 0){
+    if(v > Math.max(VECES_AVISO * ref, ref + 10)) return {v, ref, veces: v / ref};
+    return null;
+  }
+  return v > TOPE_RAMA[k] ? {v, tope: TOPE_RAMA[k]} : null;
+}
+const NOMBRE_COL = {l: "Largos", c: "Cortos", sc: "Semicortos", f: "Frutos"};
+async function confirmarSospecha(f, cap, i, k){
+  const val = cap.ramas[i][k];
+  const s = sospecha(f, k, val);
+  const clave = i + "|" + k + "|" + val;
+  if(!s || cap.aceptados[clave]) return true;
+  const det = s.ref != null
+    ? "La media del conteo es <b>" + fmt(s.ref, 0) + "</b>: esto es <b>" + fmt(s.veces, 0) + " veces más</b>."
+    : "Es mucho para una rama (más de " + s.tope + ").";
+  const ok = await modal({titulo: "¿Seguro?", rojo: true, alCerrar: false,
+    html: '<div style="font-size:22px;font-weight:800;color:' + ALTO + '">R' + (i + 1) + ' · ' + NOMBRE_COL[k] + ': ' + s.v + '</div><div style="margin-top:6px">' + det + '</div>',
+    botones: [{texto: "Corregir", color: "#0b6e4f", valor: false}, {texto: "Sí, es " + s.v, color: ALTO, valor: true}]});
+  if(ok){ cap.aceptados[clave] = true; return true; }
+  cap.foco = {t: "rama", i, k};
+  cap.ramas[i][k] = "";
+  pintarArbol(); desplazarAFoco();
+  return false;
+}
+
+function pintarCaptura(f){
+  if(!S.cap) S.cap = nuevaCaptura(f);
+  const L = LABOR[f.tipo], as = arbolesDe(f.id_local), n = normaDe(f), g = grupo(f, as, n);
+  const stat = (k, v, col, e) => '<div class="stat"><div class="k">' + k + '</div><div class="v" style="color:' + (col || "#14181a") + '">' + v + '</div>' + (e ? '<div class="e" style="color:' + (col || "#5b6467") + '">' + e + '</div>' : '') + '</div>';
+  let h = '<div class="card cab-form">' +
+    '<div class="l1"><div><div class="tit">' + esc(f.parcela) + ' · ' + L.txt + (f.ciruelo ? '<span class="tag">ciruelo</span>' : '') + '</div>' +
+    '<div class="sub">Norma <b>' + (n ? textoRango(n.min, n.max) : "—") + '</b> ' + L.valor.toLowerCase() + (f.norma_editada ? '<span class="tag edit">editada</span>' : '') +
+      ' · <button class="enlace" onclick="editarNormaConteo()">' + (n ? "cambiar" : "poner") + '</button></div></div>' +
+    '<div style="display:flex;gap:6px;flex:none"><button class="btn s peq" onclick="pausarConteo()">Otro</button><button class="btn peq" onclick="cerrarConteo()">Cerrar ✓</button></div></div>' +
+    '<div class="stats">' +
+      stat("Árboles", g.n, null, null) +
+      stat("Media", fmt(g.valor, f.tipo === "poda" ? 1 : 0), g.colorMedia, n ? textoDesvio(g, f.tipo) : "") +
+      stat("Con margen", g.pctMargen != null ? fmt(g.pctMargen, 0) + " %" : "—", g.pctMargen != null ? colorCalidad(g.pctMargen) : null, g.pctNorma != null ? fmt(g.pctNorma, 0) + " % en norma" : "") +
+      stat(L.corto, fmt(g.porRama, 1), null, fmt(g.nR, 1) + " ramas") +
+    '</div>' + barraNorma(f, as) + (as.length ? tira(f, as) : '') +
+    '<div id="franja"></div></div>';
+  h += '<div class="card" id="card-arbol"></div>';
+  if(as.length) h += '<h2>Árboles contados · ' + as.length + '</h2><div class="card" style="padding:4px 6px">' + tablaArboles(f, as) + '</div>';
+  h += '<div style="height:330px"></div>';
+  $("v-contar").innerHTML = h;
+  pintarArbol(); pintarFranja(); mostrarTeclado(true);
+}
+function tablaArboles(f, as){
+  const n = normaDe(f), poda = f.tipo === "poda";
+  let h = '<table class="lista"><thead><tr><th class="iz">Nº</th><th class="iz">Fila</th><th class="iz">Árbol</th><th>Ramas</th><th>' + (poda ? "Br eq." : "Frutos") + '</th><th>Desvío</th><th>' + (poda ? "% L" : "Fr/br") + '</th></tr></thead><tbody>';
+  as.slice().reverse().forEach(a => {
+    const c = calcArbol(f, a), gr = grado(c.valor, n);
+    h += '<tr class="clic' + (S.cap && S.cap.edit === a.id_local ? " edit" : "") + '" onclick="editarArbol(\'' + a.id_local + '\')" style="opacity:' + (c.nR <= 3 ? .55 : 1) + '">' +
+      '<td class="iz">' + a.n_orden + (a.lat == null ? ' <span style="color:' + ALTO + '" title="sin GPS">⌀</span>' : '') + (a.corregido ? ' <span title="corregido">✎</span>' : '') + '</td>' +
+      '<td class="iz">' + a.fila + '</td><td class="iz">' + a.arbol + '</td>' +
+      '<td style="' + (c.nR < 6 ? "color:" + ALTO + ";font-weight:700" : "") + '">' + c.nR + '</td>' +
+      '<td><span class="punto" style="background:' + colorGrado(gr) + '"></span><b>' + fmt(c.valor, poda ? 1 : 0) + '</b></td>' +
+      '<td style="color:' + colorGrado(gr) + '">' + (gr ? (gr.g === 0 ? "✓" : fmtS(gr.desvio, 0)) : "—") + '</td>' +
+      '<td>' + (poda ? fmt(c.pctLargos, 0) : fmt(c.frutosBr, 1)) + '</td></tr>';
+  });
+  return h + '</tbody></table><div style="font-size:11px;color:#8b9295;padding:6px 2px">Toca un árbol para corregirlo. Ramas en rojo: menos de 6. Apagados: 3 ramas o menos.</div>';
+}
+function celda(cap, foco, valor, prop, susp){
+  const act = cap.foco.t === foco.t && cap.foco.i === foco.i && cap.foco.k === foco.k;
+  const cls = "celda" + (act ? " foco" : "") + (valor === "" ? " vac" : "") + (prop ? " prop" : "") + (susp ? " sospecha" : "");
+  return '<div class="' + cls + '" data-t="' + foco.t + '"' + (foco.i != null ? ' data-i="' + foco.i + '"' : '') + (foco.k ? ' data-k="' + foco.k + '"' : '') + '>' + (valor === "" ? "·" : esc(valor)) + '</div>';
+}
+function pintarArbol(){
+  const f = formActivo(), cap = S.cap, el = $("card-arbol");
+  if(!f || !cap || !el) return;
+  const cols = columnas(f), poda = f.tipo === "poda";
+  const lbl = {l: "L", c: "C", sc: "Sc", f: "Frutos"};
+  const nOrden = cap.edit ? (DATOS.arboles.find(a => a.id_local === cap.edit) || {}).n_orden : siguienteOrden(f);
+  let h = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:16px;font-weight:800">' + (cap.edit ? "✎ Corrigiendo árbol nº " : "Árbol nº ") + nOrden + '</div><div id="gps-arbol" style="font-size:12px;font-weight:600"></div></div>';
+  h += '<div class="idarb"><div class="c"><div class="k">Fila</div>' + celda(cap, {t: "fila"}, cap.fila.v, cap.fila.prop) + '</div>' +
+    '<div class="c"><div class="k">Árbol</div>' + celda(cap, {t: "arbol"}, cap.arbol.v, cap.arbol.prop) + '</div>' +
+    '<div class="c" style="flex:.7"><div class="k">Batería <span style="opacity:.7">(opc.)</span></div>' + celda(cap, {t: "bateria"}, cap.bateria.v, false) + '</div></div>';
+  h += '<table class="ramas"><thead><tr><th></th>' + cols.map(k => '<th>' + lbl[k] + '</th>').join("") + '<th style="text-align:right">' + (poda ? "Br eq." : "") + '</th></tr></thead><tbody>';
+  cap.ramas.forEach((r, i) => {
+    const eqTxt = poda && cols.some(k => r[k] !== "") ? "= " + fmt(brEq(f, entero(r.l), entero(r.c), entero(r.sc)), 1) : "";
+    const quitar = (i === cap.ramas.length - 1 && i > 0) ? ' <span onclick="event.stopPropagation();quitarRama(' + i + ')" style="color:' + ALTO + ';font-size:15px;padding:0 2px">✕</span>' : '';
+    h += '<tr><td class="rl" onclick="enfocar({t:\'rama\',i:' + i + ',k:\'' + cols[0] + '\'})">R' + (i + 1) + '</td>' +
+      cols.map(k => '<td>' + celda(cap, {t: "rama", i, k}, r[k], false, !!sospecha(f, k, r[k]) && !cap.aceptados[i + "|" + k + "|" + r[k]]) + '</td>').join("") +
+      '<td class="eq">' + eqTxt + quitar + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  if(!poda){
+    h += '<div style="margin-top:6px">' + (cap.verBr
+      ? '<div style="font-size:12px;color:#5b6467">Brindillos del árbol (opcional)</div><div class="idarb" style="margin-top:2px">' + ["l", "c", "sc"].map(k => '<div class="c"><div class="k">' + lbl[k] + '</div>' + celda(cap, {t: "br", k}, cap.br[k], false) + '</div>').join("") + '</div>'
+      : '<button class="btn s peq" onclick="verBrindillos()">+ Brindillos del árbol (L, C, Sc)</button>') + '</div>';
+  }
+  const c = calcArbol(f, arbolDeCaptura(f, cap)), gr = grado(c.valor, normaDe(f));
+  h += '<div class="res-arbol">' +
+    (poda ? '<span>L ' + c.L + ' · C ' + c.C + ' · Sc ' + c.Sc + '</span><span><b style="color:' + colorGrado(gr) + '">' + fmt(c.valor, 1) + '</b> br eq.</span>'
+          : '<span><b style="color:' + colorGrado(gr) + '">' + c.F + '</b> frutos</span>' + (c.frutosBr != null ? '<span>' + fmt(c.frutosBr, 1) + ' fr/br</span>' : '')) +
+    '<span>' + c.nR + ' rama(s) · ' + fmt(c.porRama, 1) + '/rama</span>' +
+    (c.nR >= 4 || cap.edit ? '<span class="pill" style="background:' + colorGrado(gr) + '">' + esc(textoGrado(gr, f.tipo)) + '</span>' : '') + '</div>';
+  el.innerHTML = h;
+  el.querySelectorAll(".celda").forEach(d => { d.onclick = () => enfocar({t: d.dataset.t, i: d.dataset.i != null ? +d.dataset.i : undefined, k: d.dataset.k}); });
+  pintarGPSArbol(); pintarAccionesTeclado(); pintarTeclaOK(f, cap);
+}
+function pintarGPSArbol(){
+  const el = $("gps-arbol"), cap = S.cap;
+  if(!el || !cap) return;
+  if(cap.edit){
+    const a = DATOS.arboles.find(x => x.id_local === cap.edit);
+    el.innerHTML = a && a.lat != null ? '<span style="color:#5b6467">📍 guardada ±' + a.precision + ' m</span>' : '<span style="color:' + ALTO + '">sin GPS</span>';
+    return;
+  }
+  const g = cap.gps || S.gps;
+  if(!g){ el.innerHTML = '<span style="color:' + ALTO + '">📍 sin GPS</span>'; return; }
+  el.innerHTML = '<span style="color:' + (g.prec <= 10 ? VERDE : g.prec <= 25 ? BAJO : ALTO) + '">📍 ±' + g.prec + ' m' + (cap.gps ? ' · fijada' : '') + '</span>';
+}
+function pintarFranja(){
+  const el = $("franja"), f = formActivo();
+  if(!el || !f) return;
+  const ev = evaluarPosicion(f.parcela, S.gps);
+  const m = {margen: ["En el borde de " + f.parcela + " (a " + ev.dist + " m)", "#fff5e0", "#8a5a00"],
+    lejos: ["Fuera de " + f.parcela + " · a " + ev.dist + " m", "#fbeaea", ALTO],
+    otra: ["El GPS te sitúa en " + ev.otra + ", no en " + f.parcela, "#fbeaea", ALTO],
+    sin_gps: [S.gps ? "GPS poco preciso (±" + S.gps.prec + " m)" : "Sin GPS · pulsa 📍 arriba", "#eef0ef", "#5b6467"]}[ev.estado];
+  el.innerHTML = m ? '<div class="franja" style="background:' + m[1] + ';color:' + m[2] + '">' + esc(m[0]) + '</div>' : "";
+}
+function enfocar(foco){
+  const f = formActivo();
+  if(!f || !S.cap || (foco.t === "rama" && !S.cap.ramas[foco.i])) return;
+  S.cap.foco = foco; pintarArbol(); desplazarAFoco();
+}
+function desplazarAFoco(){
+  const el = document.querySelector("#card-arbol .celda.foco");
+  if(!el) return;
+  const r = el.getBoundingClientRect(), tecl = $("teclado").getBoundingClientRect().top || window.innerHeight;
+  if(r.bottom > tecl - 8 || r.top < 110) window.scrollBy({top: r.top - Math.min(tecl * 0.45, 260), behavior: "smooth"});
+}
+function verBrindillos(){ S.cap.verBr = true; S.cap.foco = {t: "br", k: "l"}; pintarArbol(); desplazarAFoco(); }
+function quitarRama(i){
+  const f = formActivo(), cap = S.cap;
+  if(!f || !cap || cap.ramas.length <= 1) return;
+  cap.ramas.splice(i, 1);
+  if(cap.foco.t === "rama" && cap.foco.i >= cap.ramas.length) cap.foco = {t: "rama", i: cap.ramas.length - 1, k: columnas(f)[0]};
+  pintarArbol();
+}
+
+// ---------- Teclado ----------
+function mostrarTeclado(si){ $("teclado").style.display = si ? "block" : "none"; }
+function pintarAccionesTeclado(){
+  const cap = S.cap, acc = $("teclado-acc");
+  if(!cap) return;
+  acc.innerHTML = cap.edit
+    ? '<button style="background:#fff;color:' + ALTO + ';border:1.5px solid ' + ALTO + '" onclick="borrarArbol()">Borrar</button><button style="background:#8a9299;color:#fff" onclick="cancelarEdicion()">Cancelar</button><button style="background:#0b6e4f;color:#fff;flex:1.6" onclick="guardarArbol()">Guardar cambios ✓</button>'
+    : '<button style="background:#fff;color:#14181a;border:1.5px solid #9aa3a0" onclick="atras()">← Atrás</button><button style="background:#0b6e4f;color:#fff;flex:1.6" onclick="guardarArbol()">Guardar árbol ✓</button>';
+}
+function valorFoco(cap){ const fo = cap.foco; return fo.t === "rama" ? cap.ramas[fo.i][fo.k] : fo.t === "br" ? cap.br[fo.k] : cap[fo.t].v; }
+function ponerFoco(cap, v){ const fo = cap.foco; if(fo.t === "rama") cap.ramas[fo.i][fo.k] = v; else if(fo.t === "br") cap.br[fo.k] = v; else { cap[fo.t].v = v; cap[fo.t].prop = false; } }
+function tecla(k){
+  const f = formActivo(), cap = S.cap;
+  if(!f || !cap) return;
+  if(k === "OK"){ siguiente(f, cap); return; }
+  if(!cap.iniciado){ cap.iniciado = true; if(S.gps && Date.now() - S.gps.ts < 30000) cap.gps = Object.assign({}, S.gps); }
+  const fo = cap.foco;
+  let v = valorFoco(cap) || "";
+  if((fo.t === "fila" || fo.t === "arbol") && cap[fo.t].prop){ v = ""; cap[fo.t].prop = false; }
+  if(k === "B") v = v.slice(0, -1);
+  else if(v === "0") v = k;
+  else if(v.length < ((fo.t === "rama" || fo.t === "br") ? 3 : 4)) v += k;
+  ponerFoco(cap, v);
+  pintarArbol();
+}
+function ordenCampos(f, cap){
+  const cols = columnas(f), o = [{t: "fila"}, {t: "arbol"}];
+  cap.ramas.forEach((r, i) => cols.forEach(k => o.push({t: "rama", i, k})));
+  if(cap.verBr) ["l", "c", "sc"].forEach(k => o.push({t: "br", k}));
+  return o;
+}
+async function siguiente(f, cap){
+  const cols = columnas(f), fo = cap.foco;
+  if(fo.t === "rama" && fo.i > 0 && ramaEnBlanco(f, cap, fo.i)){ guardarArbol(); return; }
+  if(fo.t === "rama" && !await confirmarSospecha(f, cap, fo.i, fo.k)) return;
+  if(fo.t === "fila"){ cap.fila.prop = false; cap.foco = {t: "arbol"}; }
+  else if(fo.t === "arbol" || fo.t === "bateria"){ cap.arbol.prop = false; cap.foco = {t: "rama", i: 0, k: cols[0]}; }
+  else if(fo.t === "rama"){
+    const j = cols.indexOf(fo.k);
+    if(j < cols.length - 1) cap.foco = {t: "rama", i: fo.i, k: cols[j + 1]};
+    else if(fo.i < MAX_RAMAS - 1){ if(!cap.ramas[fo.i + 1]) cap.ramas.push(ramaVacia(f)); cap.foco = {t: "rama", i: fo.i + 1, k: cols[0]}; }
+    else { aviso("Máximo " + MAX_RAMAS + " ramas. Pulsa «Guardar árbol»."); return; }
+  }
+  else if(fo.t === "br"){ const o = ["l", "c", "sc"], j = o.indexOf(fo.k); if(j < 2) cap.foco = {t: "br", k: o[j + 1]}; else { aviso("Pulsa «Guardar árbol»"); return; } }
+  pintarArbol(); desplazarAFoco();
+}
+function ramaVaciaEn(f, cap, i){ return columnas(f).every(k => entero(cap.ramas[i][k]) === 0); }
+function ramaEnBlanco(f, cap, i){ return columnas(f).every(k => cap.ramas[i][k] === ""); }
+function pintarTeclaOK(f, cap){
+  const b = document.querySelector('#teclado button[data-k="OK"]');
+  if(!b) return;
+  const fo = cap.foco, fin = fo.t === "rama" && fo.i > 0 && ramaEnBlanco(f, cap, fo.i);
+  b.textContent = fin ? "Guardar ✓" : "Siguiente →";
+}
+function atras(){
+  const f = formActivo(), cap = S.cap;
+  if(!f || !cap) return;
+  const o = ordenCampos(f, cap), fo = cap.foco;
+  let i = o.findIndex(x => x.t === fo.t && x.i === fo.i && x.k === fo.k);
+  if(fo.t === "bateria") i = 2;
+  if(i <= 0){ aviso("Estás en el primer campo"); return; }
+  const prev = o[i - 1];
+  // Al volver desde una rama vacía al final, se quita esa rama
+  if(fo.t === "rama" && fo.i === cap.ramas.length - 1 && fo.i > 0 && prev.i === fo.i - 1 && ramaVaciaEn(f, cap, fo.i)) cap.ramas.pop();
+  cap.foco = prev;
+  pintarArbol(); desplazarAFoco();
+}
+
+// ---------- Guardar, corregir, borrar ----------
+async function guardarArbol(){
+  const f = formActivo(), cap = S.cap;
+  if(!f || !cap) return;
+  const fila = parseInt(cap.fila.v, 10), arbol = parseInt(cap.arbol.v, 10);
+  if(!(fila >= 1)){ aviso("Indica la fila"); enfocar({t: "fila"}); return; }
+  if(!(arbol >= 1)){ aviso("Indica el árbol"); enfocar({t: "arbol"}); return; }
+  for(let i = 0; i < cap.ramas.length; i++) for(const k of columnas(f)) if(!await confirmarSospecha(f, cap, i, k)) return;
+  const datos = arbolDeCaptura(f, cap);
+  let sinRamas = false;
+  if(!datos.ramas.length){
+    const r = await modal({titulo: "No hay ramas apuntadas", html: "¿Es un árbol sin ramas? Cuenta como 0 en las medias (no se salta).",
+      botones: [{texto: "Sí, árbol sin ramas", valor: "sin"}, {texto: "Volver", color: "#8a9299", valor: null}]});
+    if(r !== "sin") return;
+    sinRamas = true;
+  }
+  const rep = arbolesDe(f.id_local).filter(a => a.id_local !== cap.edit && a.fila === fila && a.arbol === arbol);
+  if(rep.length && !await pregunta("Árbol repetido", "Ya has contado <b>fila " + fila + " · árbol " + arbol + "</b> en este conteo (nº " + rep.map(a => a.n_orden).join(", ") + ").<br>¿Guardarlo otra vez?", "Guardar igualmente", "Corregir")){ enfocar({t: "arbol"}); return; }
+  let gps = cap.gps;
+  if(!gps && S.gps && Date.now() - S.gps.ts < 30000) gps = Object.assign({}, S.gps);
+  if(!cap.edit){
+    const ev = evaluarPosicion(f.parcela, gps);
+    if(ev.estado === "otra" && !await pregunta("¿Parcela correcta?", "El GPS te sitúa en <b>" + esc(ev.otra) + "</b>, no en " + esc(f.parcela) + ".<br>¿Guardar el árbol en " + esc(f.parcela) + "?", "Sí, guardar", "Cancelar")) return;
+    if(ev.estado === "lejos" && !S.confLejos[f.id_local]){
+      if(!await pregunta("Fuera de la parcela", "Estás a <b>" + ev.dist + " m</b> de " + esc(f.parcela) + ".<br>¿Guardar el árbol igualmente?", "Sí, guardar", "Cancelar")) return;
+      S.confLejos[f.id_local] = true;
+    }
+  }
+  const prev = cap.edit ? DATOS.arboles.find(a => a.id_local === cap.edit) : null;
+  const id = uuid();
+  const a = prev ? Object.assign({}, prev) : {
+    id_local: id, uuid: id, form_id: f.id_local, n_orden: siguienteOrden(f), creado: ahoraISO(), contado_at: ahoraISO(),
+    contador: contadorHoy() || f.contador, lat: gps ? gps.lat : null, lon: gps ? gps.lon : null, precision: gps ? gps.prec : null, corregido: false, originales: null
+  };
+  const nuevo = {fila, arbol, bateria: cap.bateria.v !== "" ? parseInt(cap.bateria.v, 10) : null, sin_ramas: sinRamas, ramas: sinRamas ? [] : datos.ramas, br: f.tipo === "aclareo" ? datos.br : null};
+  if(prev){
+    const ant = {fila: prev.fila, arbol: prev.arbol, bateria: prev.bateria, sin_ramas: prev.sin_ramas, ramas: prev.ramas, br: prev.br};
+    if(JSON.stringify(ant) !== JSON.stringify(nuevo)){ a.corregido = true; if(!a.originales) a.originales = ant; }
+  }
+  Object.assign(a, nuevo);
+  a.modificado = ahoraISO();
+  try{ await guardarArbolBD(a); await guardarForm(f); }
+  catch(e){ await alerta("No se pudo guardar el árbol", esc(e.message || e) + "<br>No cierres la app: vuelve a pulsar Guardar."); return; }
+  const c = calcArbol(f, a), gr = grado(c.valor, normaDe(f));
+  aviso((prev ? "Corregido" : "Guardado") + " nº " + a.n_orden + " · F" + fila + " A" + arbol + " · " +
+    (a.sin_ramas ? "sin ramas" : fmt(c.valor, f.tipo === "poda" ? 1 : 0) + " " + LABOR[f.tipo].unidad + " · " + textoGrado(gr, f.tipo)) + (gps || prev ? "" : " · sin GPS"));
+  S.cap = nuevaCaptura(f);
+  pintarCaptura(f);
+  window.scrollTo({top: 0, behavior: "smooth"});
+}
+function editarArbol(id){ const f = formActivo(), a = DATOS.arboles.find(x => x.id_local === id); if(!f || !a) return; S.cap = capturaDesde(f, a); pintarCaptura(f); window.scrollTo({top: 0, behavior: "smooth"}); }
+function cancelarEdicion(){ const f = formActivo(); S.cap = nuevaCaptura(f); pintarCaptura(f); }
+async function borrarArbol(){
+  const f = formActivo(), cap = S.cap;
+  if(!f || !cap || !cap.edit) return;
+  const a = DATOS.arboles.find(x => x.id_local === cap.edit);
+  if(!await pregunta("Borrar árbol", "¿Borrar el árbol nº " + a.n_orden + " (fila " + a.fila + " · árbol " + a.arbol + ")?" + (f.subido ? "<br><br>El conteo ya se subió: en la base se conserva la versión anterior." : ""), "Borrar", "Cancelar", true)) return;
+  try{ await borrarArbolBD(a.id_local); await guardarForm(f); } catch(e){ await alerta("No se pudo borrar", esc(e.message)); return; }
+  aviso("Árbol borrado");
+  S.cap = nuevaCaptura(f); pintarCaptura(f);
+}
+function pausarConteo(){ localStorage.removeItem(K.formActivo); S.cap = null; aviso("El conteo sigue abierto: lo tienes arriba para continuar."); pintarContar(); }
+async function cerrarConteo(){
+  const f = formActivo();
+  if(!f) return;
+  const cap = S.cap, as = arbolesDe(f.id_local);
+  if(cap && !cap.edit && cap.iniciado && cap.ramas.some(r => columnas(f).some(k => r[k] !== "")) &&
+     !await pregunta("Árbol sin guardar", "El árbol que estás contando no está guardado. Si cierras, se pierde.", "Cerrar sin guardarlo", "Volver")) return;
+  const g = grupo(f, as, normaDe(f));
+  if(!await pregunta("Cerrar conteo", "<b>" + esc(f.parcela) + " · " + LABOR[f.tipo].txt + "</b><br>" + as.length + " árbol(es) · media " + fmt(g.valor, 1) +
+     (g.pctMargen != null ? " · " + fmt(g.pctMargen, 0) + " % con margen" : "") + "<br><br>Después, súbelo desde Conteos.", "Cerrar conteo", "Seguir contando")) return;
+  f.estado = "cerrado"; f.cerrado = ahoraISO();
+  await guardarForm(f);
+  localStorage.removeItem(K.formActivo);
+  S.cap = null;
+  aviso("Conteo cerrado. Súbelo desde Conteos cuando tengas conexión.");
+  pintarContar();
+}
+
+// ============================================================================
+// PARCELA · CÓMO VA (para el técnico o el coordinador en campo)
+// ============================================================================
+function filtroParcela(){
+  const fa = formActivo();
+  const g = lsGet(K.vistaParcela, {});
+  const r = {tipo: g.tipo || (fa ? fa.tipo : "poda"), parcela: g.parcela || (fa ? fa.parcela : ""), periodo: g.periodo || "hoy", ver: g.ver || "grado"};
+  if(fa && !g.parcela){ r.parcela = fa.parcela; r.tipo = fa.tipo; }
+  return r;
+}
+function arbolesFiltro(fl){
+  const desde = fl.periodo === "hoy" ? hoyISO() : fl.periodo === "7" ? new Date(Date.now() - 7 * 86400000).toLocaleDateString("sv-SE") : "0000";
+  const out = [];
+  formsFinca().filter(f => f.tipo === fl.tipo && (!fl.parcela || f.parcela === fl.parcela) && (f.fecha || "") >= desde)
+    .forEach(f => arbolesDe(f.id_local).forEach(a => out.push({f, a, c: calcArbol(f, a)})));
+  return out;
+}
+function pintarParcela(){
+  const fl = filtroParcela(), c = $("v-parcela");
+  if(!Object.keys(poligonos()).length){ c.innerHTML = '<div class="card vacio">El móvil no está configurado.</div>'; return; }
+  const parcelasCon = [...new Set(formsFinca().filter(f => f.tipo === fl.tipo).map(f => f.parcela))].sort();
+  const pts = arbolesFiltro(fl);
+  // Norma de referencia: la del conteo más reciente; sin norma, la media de lo que se ve (provisional)
+  // Cada árbol se compara con la norma de su conteo; si ningún conteo tiene norma, con la media de lo que se ve (provisional)
+  let norma = null, provisional = false;
+  if(!pts.some(p => normaDe(p.f)) && pts.length >= 3){ const m = pts.reduce((s, p) => s + p.c.valor, 0) / pts.length; norma = {min: m, max: m}; provisional = true; }
+  const normasVistas = [...new Set(pts.map(p => normaDe(p.f)).filter(Boolean).map(n => textoRango(n.min, n.max)))];
+  const g = grupoPuntos(pts, norma);
+  let h = '<div class="card" style="padding:8px">' +
+    '<div style="display:flex;gap:6px"><select id="p-tipo" onchange="cambiarFiltroParcela()" style="flex:1;padding:9px;border:1px solid #d5dad8;border-radius:8px">' +
+      '<option value="poda"' + (fl.tipo === "poda" ? " selected" : "") + '>Poda</option><option value="aclareo"' + (fl.tipo === "aclareo" ? " selected" : "") + '>Aclareo</option></select>' +
+    '<select id="p-parcela" onchange="cambiarFiltroParcela()" style="flex:1.2;padding:9px;border:1px solid #d5dad8;border-radius:8px"><option value="">Todas</option>' +
+      parcelasCon.map(p => '<option' + (p === fl.parcela ? " selected" : "") + '>' + esc(p) + '</option>').join("") + '</select>' +
+    '<select id="p-periodo" onchange="cambiarFiltroParcela()" style="flex:1;padding:9px;border:1px solid #d5dad8;border-radius:8px">' +
+      [["hoy", "Hoy"], ["7", "7 días"], ["todo", "Todo"]].map(([v, t]) => '<option value="' + v + '"' + (fl.periodo === v ? " selected" : "") + '>' + t + '</option>').join("") + '</select></div>' +
+    '<div class="seg peq" style="margin-top:6px"><button class="' + (fl.ver === "grado" ? "on" : "") + '" onclick="verParcela(\'grado\')">Frente a la norma</button>' +
+      '<button class="' + (fl.ver === "largos" ? "on" : "") + '" onclick="verParcela(\'largos\')">% de largos</button></div></div>';
+  if(pts.length){
+    const L = LABOR[fl.tipo];
+    h += '<div class="card" style="font-size:14px">' +
+      '<div style="font-size:16px;font-weight:800;color:' + g.colorMedia + '">' + (g.conNorma ? (provisional ? "Sin norma · " : "") + textoDesvio(g, fl.tipo) : "Sin norma") + '</div>' +
+      '<div style="margin-top:4px">' + g.n + ' árboles · media <b>' + fmt(g.valor, fl.tipo === "poda" ? 1 : 0) + '</b> ' + L.unidad +
+      (normasVistas.length ? ' · norma ' + normasVistas.join(" / ") : '') +
+      (g.pctMargen != null && !provisional ? ' · <span class="pill" style="background:' + colorCalidad(g.pctMargen) + ';color:#14181a">' + fmt(g.pctMargen, 0) + ' % con margen</span>' : '') +
+      (fl.tipo === "poda" && g.pctLargos != null ? ' · ' + fmt(g.pctLargos, 0) + ' % largos' : '') + '</div>' +
+      (provisional ? '<div style="font-size:11px;color:#8b9295;margin-top:3px">Sin norma: los colores comparan cada árbol con la media de lo que se ve.</div>' : '') + '</div>';
+  }
+  h += '<div id="mapa" class="mapa-grande"></div><div id="p-leyenda" class="leyenda"></div>';
+  h += zonasHTML(pts, norma, provisional, fl);
+  c.innerHTML = h;
+  pintarMapaParcela(fl, pts, norma);
+}
+function grupoPuntos(pts, norma){
+  if(!pts.length) return grupo({tipo: "poda"}, [], norma);
+  const f0 = pts[0].f;
+  // Cada árbol se calcula con su propio conteo (ciruelo); se agrega aquí
+  const vals = pts.map(p => p.c);
+  const grs = pts.map(p => grado(p.c.valor, normaDe(p.f) || norma)).filter(Boolean);
+  const conRef = pts.find(p => normaDe(p.f));
+  norma = conRef ? normaDe(conRef.f) : norma;
+  const media = k => { const v = vals.map(c => c[k]).filter(x => x != null && isFinite(x)); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+  const conN = grs.length, desvMedio = conN ? grs.reduce((s, g) => s + g.desvio, 0) / conN : null, desvAbs = conN ? grs.reduce((s, g) => s + Math.abs(g.desvio), 0) / conN : null;
+  const r = norma ? rango(norma.min, norma.max) : null;
+  let colorMedia = GRIS;
+  if(r && desvAbs != null){ const t = 100 * desvAbs / ((r[0] + r[1]) / 2); colorMedia = t <= MARGEN_NORMA / 2 ? VERDE : desvMedio < 0 ? (t <= MARGEN_NORMA ? SUAVE_BAJO : BAJO) : (t <= MARGEN_NORMA ? SUAVE_ALTO : ALTO); }
+  return {n: vals.length, valor: media("valor"), porRama: media("porRama"), pctLargos: media("pctLargos"), conNorma: conN,
+    pctNorma: conN ? grs.filter(g => g.g === 0).length / conN * 100 : null, pctMargen: conN ? grs.filter(g => g.g <= 1).length / conN * 100 : null,
+    desvMedio, desvAbs, colorMedia, tipo: f0.tipo};
+}
+// Resumen por grupos de 5 filas (sin los árboles de 3 ramas o menos, como el dashboard)
+function zonasHTML(pts, norma, provisional, fl){
+  const conFila = pts.filter(p => p.a.fila >= 1 && p.c.nR > 3);
+  if(conFila.length < 2) return pts.length ? '<div class="card" style="font-size:12px;color:#8b9295;margin-top:8px">El resumen por filas sale a partir de 2 árboles con más de 3 ramas.</div>' : '<div class="card vacio" style="margin-top:8px">No hay árboles contados con este filtro.</div>';
+  const zonas = {};
+  conFila.forEach(p => { const z = Math.floor((p.a.fila - 1) / 5); (zonas[z] = zonas[z] || []).push(p); });
+  let h = '<h2>Por grupos de filas</h2><div class="card" style="padding:4px 6px"><table class="lista"><thead><tr><th class="iz">Filas</th><th>Árboles</th><th>Media</th><th>Con margen</th><th>Desvío</th>' + (fl.tipo === "poda" ? '<th>% L</th>' : '') + '</tr></thead><tbody>';
+  Object.keys(zonas).map(Number).sort((a, b) => a - b).forEach(z => {
+    const g = grupoPuntos(zonas[z], norma);
+    h += '<tr><td class="iz"><b>' + (z * 5 + 1) + '–' + (z * 5 + 5) + '</b></td><td>' + g.n + '</td>' +
+      '<td style="color:' + g.colorMedia + ';font-weight:800">' + fmt(g.valor, fl.tipo === "poda" ? 1 : 0) + '</td>' +
+      '<td>' + (g.pctMargen != null && !provisional ? '<span class="pill" style="background:' + colorCalidad(g.pctMargen) + ';color:#14181a">' + fmt(g.pctMargen, 0) + ' %</span>' : '—') + '</td>' +
+      '<td style="color:' + g.colorMedia + '">' + (g.desvMedio == null ? "—" : Math.abs(g.desvMedio) < 0.05 ? "✓" : (g.desvMedio < 0 ? "↓ " : "↑ ") + fmt(Math.abs(g.desvMedio), 1)) + '</td>' +
+      (fl.tipo === "poda" ? '<td>' + fmt(g.pctLargos, 0) + '</td>' : '') + '</tr>';
+  });
+  return h + '</tbody></table><div style="font-size:11px;color:#8b9295;padding:6px 2px">Sin los árboles de 3 ramas o menos. ' + (provisional ? "Sin norma: comparado con la media." : "Desvío medio desde el límite de la norma.") + '</div></div>';
+}
+function cambiarFiltroParcela(){
+  const g = lsGet(K.vistaParcela, {});
+  lsSet(K.vistaParcela, Object.assign(g, {tipo: $("p-tipo").value, parcela: $("p-parcela").value, periodo: $("p-periodo").value}));
+  pintarParcela();
+}
+function verParcela(v){ const g = lsGet(K.vistaParcela, {}); g.ver = v; const fl = filtroParcela(); g.tipo = fl.tipo; g.parcela = fl.parcela; lsSet(K.vistaParcela, g); pintarParcela(); }
+function pintarMapaParcela(fl, pts, norma){
+  if(S.mapa){ try{ S.mapa.remove(); } catch(e){} S.mapa = null; }
+  const map = L.map("mapa", {zoomControl: true});
+  S.mapa = map; S.mapaGPS = null;
+  crearCapaTiles().addTo(map);
+  let bounds = null, bParc = null;
+  gruposParcelas().forEach(g => {
+    const sel = fl.parcela && g.cods.includes(fl.parcela);
+    const pl = L.polygon(g.poly.map(p => [p[1], p[0]]), {color: sel ? "#ffea00" : "#ffffff", weight: sel ? 3 : 1, opacity: sel ? 1 : .6, fillOpacity: sel ? .08 : .02, interactive: false}).addTo(map);
+    const b = pl.getBounds();
+    bounds = bounds ? bounds.extend(b) : L.latLngBounds(b.getSouthWest(), b.getNorthEast());
+    if(sel) bParc = b;
+    L.marker(b.getCenter(), {interactive: false, icon: L.divIcon({className: "", iconSize: [70, 20], iconAnchor: [35, 10],
+      html: '<div style="background:rgba(255,255,255,.85);border-radius:5px;padding:1px 5px;font-size:11px;font-weight:700;text-align:center;white-space:nowrap">' + esc(g.nombre) + '</div>'})}).addTo(map);
+  });
+  const conGps = pts.filter(p => p.a.lat != null);
+  // % de largos: color relativo a lo que se ve (p10–p90), verde = más largos
+  let p10 = 0, p90 = 100;
+  const largos = conGps.map(p => p.c.pctLargos).filter(x => x != null).sort((a, b) => a - b);
+  if(largos.length >= 3){ p10 = largos[Math.floor(largos.length * 0.1)]; p90 = largos[Math.min(largos.length - 1, Math.floor(largos.length * 0.9))]; if(p90 - p10 < 1) p90 = p10 + 1; }
+  const colorLargos = v => v == null ? GRIS_Q : PALETA[Math.max(0, Math.min(7, Math.round((1 - (v - p10) / (p90 - p10)) * 7)))];
+  const cuenta = {};
+  let pb = null;
+  conGps.forEach(p => {
+    const gr = grado(p.c.valor, normaDe(p.f) || norma);
+    let col, txt;
+    if(fl.ver === "largos"){ col = colorLargos(p.c.pctLargos); txt = p.c.pctLargos != null ? fmt(p.c.pctLargos, 0) : "·"; }
+    else { col = colorGrado(gr); txt = gr ? (gr.g === 0 ? "✓" : fmtS(gr.desvio, 0)) : "·"; const k = gr ? (gr.g === 0 ? "en norma" : (gr.abajo ? "bajo" : "alto") + gr.g) : "sin"; cuenta[k] = (cuenta[k] || 0) + 1; }
+    const tam = 26;
+    const icon = L.divIcon({className: "", iconSize: [tam, tam], iconAnchor: [tam / 2, tam / 2],
+      html: '<div class="mk" style="width:' + tam + 'px;height:' + tam + 'px;background:' + col + ';opacity:' + (p.c.nR <= 3 ? .45 : 1) + '">' + esc(txt) + '</div>'});
+    L.marker([p.a.lat, p.a.lon], {icon}).on("click", () => fichaArbol(p.a.id_local, normaDe(p.f) ? null : norma)).addTo(map);
+    pb = pb ? pb.extend([p.a.lat, p.a.lon]) : L.latLngBounds([p.a.lat, p.a.lon], [p.a.lat, p.a.lon]);
+  });
+  if(pb) map.fitBounds(pb.pad(0.5), {maxZoom: 19});
+  else if(bParc) map.fitBounds(bParc, {padding: [15, 15]});
+  else if(bounds) map.fitBounds(bounds, {padding: [15, 15]});
+  pintarGPSMapa();
+  const ley = $("p-leyenda");
+  if(fl.ver === "largos"){
+    ley.innerHTML = '<span><span class="punto" style="background:' + PALETA[0] + '"></span>más largos (' + fmt(p90, 0) + ' %)</span><span><span class="punto" style="background:' + PALETA[4] + '"></span>medio</span><span><span class="punto" style="background:' + PALETA[7] + '"></span>menos largos (' + fmt(p10, 0) + ' %)</span><span style="color:#8b9295">El número es el % de largos del árbol.</span>';
+  } else {
+    const B = LABOR[fl.tipo];
+    ley.innerHTML = [[VERDE, "en norma"], [SUAVE_BAJO, B.bajo + " ≤5 %"], [BAJO, B.bajo + " >5 %"], [SUAVE_ALTO, B.alto + " ≤5 %"], [ALTO, B.alto + " >5 %"]].map(([c, t]) => '<span><span class="punto" style="background:' + c + '"></span>' + t + '</span>').join("") +
+      '<span style="color:#8b9295">El número es el desvío desde el límite.</span>' + (pts.length > conGps.length ? '<span style="color:' + ALTO + '">' + (pts.length - conGps.length) + ' sin GPS</span>' : '');
+  }
+  setTimeout(() => { try{ map.invalidateSize(); } catch(e){} }, 150);
+}
+function pintarGPSMapa(){
+  if(!S.mapa || !S.gps) return;
+  if(S.mapaGPS) S.mapaGPS.setLatLng([S.gps.lat, S.gps.lon]);
+  else S.mapaGPS = L.circleMarker([S.gps.lat, S.gps.lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#1b5e9e", fillOpacity: 1, interactive: false}).addTo(S.mapa);
+}
+function popupArbol(f, a, c, gr){
+  const poda = f.tipo === "poda";
+  let h = '<div style="font-size:13px;min-width:190px"><b>' + esc(f.parcela) + ' · F' + a.fila + ' · A' + a.arbol + '</b>' + (a.bateria != null ? ' · bat. ' + a.bateria : '') + '<br>' +
+    '<b style="color:' + colorGrado(gr) + '">' + fmt(c.valor, poda ? 1 : 0) + '</b> ' + LABOR[f.tipo].unidad + ' · ' + esc(textoGrado(gr, f.tipo)) + (gr && gr.g ? ' (' + fmtS(gr.desvio, 0) + ')' : '') + '<br>' +
+    (a.sin_ramas ? 'Árbol sin ramas' : c.nR + ' ramas · ' + fmt(c.porRama, 1) + '/rama' + (poda ? ' · ' + fmt(c.pctLargos, 0) + ' % largos' : '')) + '<br>';
+  if(!a.sin_ramas && a.ramas.length) h += '<div style="font-size:11px;color:#5b6467;margin-top:3px">' + a.ramas.map((r, i) => 'R' + (i + 1) + ' ' + (poda ? r.l + '·' + r.c + '·' + r.sc : r.f)).join(" &nbsp;") + '</div>';
+  if(!poda && a.br) h += '<div style="font-size:11px;color:#5b6467">Brindillos L' + a.br.l + ' C' + a.br.c + ' Sc' + a.br.sc + ' · ' + fmt(c.frutosBr, 1) + ' fr/br</div>';
+  return h + '<div style="font-size:11px;color:#8b9295;margin-top:3px">' + fechaCorta(f.fecha) + ' · ' + esc(a.contador || f.contador || "") + (a.precision != null ? ' · ±' + a.precision + ' m' : '') + '</div></div>';
+}
+
+// ============================================================================
+// FICHA DEL ÁRBOL (panel que sube desde abajo: mapa, tira de colores)
+// ============================================================================
+const COL_L = "#2e6b2e", COL_C = "#86b36a", COL_SC = "#c9b458", COL_F = "#b36b00";
+function fichaArbol(idArbol, normaProvisional){
+  const a = DATOS.arboles.find(x => x.id_local === idArbol);
+  const f = a ? formPorId(a.form_id) : null;
+  if(!a || !f) return;
+  const poda = f.tipo === "poda", L = LABOR[f.tipo], c = calcArbol(f, a);
+  const n = normaDe(f) || normaProvisional || null, gr = grado(c.valor, n);
+  const col = colorGrado(gr);
+  let h = '<div class="asa"></div><div class="fz-cab"><div><div class="fz-tit">' + esc(f.parcela) + ' · Fila ' + a.fila + ' · Árbol ' + a.arbol + '</div>' +
+    '<div class="fz-sub">Nº ' + a.n_orden + ' del conteo de ' + L.txt.toLowerCase() + ' · ' + fechaCorta(f.fecha) + ' · ' + esc(a.contador || f.contador || "") +
+      (a.bateria != null ? ' · batería ' + a.bateria : '') + (a.precision != null ? ' · 📍 ±' + a.precision + ' m' : ' · sin GPS') + (a.corregido ? ' · <b>corregido</b>' : '') + '</div></div>' +
+    '<button onclick="cerrarFicha()" style="flex:none;border:none;background:#f2f5f3;border-radius:50%;width:36px;height:36px;font-size:18px;cursor:pointer">✕</button></div>';
+  h += '<div class="fz-valor"><span class="n" style="color:' + col + '">' + fmt(c.valor, poda ? 1 : 0) + '</span><span class="u">' + L.unidad + '</span>' +
+    '<span class="pill" style="background:' + col + ';font-size:13px;padding:4px 10px">' + esc(textoGrado(gr, f.tipo)) + (gr && gr.g ? ' · ' + fmtS(gr.desvio, 0) : '') + '</span>' +
+    (n ? '<span style="font-size:12px;color:#5b6467">norma ' + textoRango(n.min, n.max) + (normaProvisional && !normaDe(f) ? ' (media, sin norma)' : '') + '</span>' : '') + '</div>';
+  if(n) h += barraNorma(Object.assign({}, f, {norma: n}), [a]).replace('class="barra-norma"', 'class="barra-norma" style="margin-top:14px"');
+  h += '<div class="fz-datos"><div><b' + (c.nR < 6 ? ' style="color:' + ALTO + '"' : '') + '>' + c.nR + '</b><span>ramas</span></div>' +
+    '<div><b>' + fmt(c.porRama, 1) + '</b><span>' + (poda ? "br eq./rama" : "frutos/rama") + '</span></div>' +
+    (poda ? '<div><b>' + fmt(c.pctLargos, 0) + ' %</b><span>largos</span></div>' : '<div><b>' + fmt(c.frutosBr, 1) + '</b><span>frutos/brind.</span></div>') + '</div>';
+  if(a.sin_ramas || !a.ramas.length){
+    h += '<div class="vacio" style="padding:14px">Árbol sin ramas (cuenta como 0).</div>';
+  } else {
+    const tot = r => poda ? entero(r.l) + entero(r.c) + entero(r.sc) : entero(r.f);
+    const max = Math.max(1, ...a.ramas.map(tot));
+    h += '<div style="font-size:12px;font-weight:700;color:#5b6467;margin-top:14px">RAMA A RAMA</div>';
+    a.ramas.forEach((r, i) => {
+      const seg = (v, color) => v > 0 ? '<i style="width:' + (v / max * 100) + '%;background:' + color + '">' + v + '</i>' : '';
+      h += '<div class="fz-rama"><span class="r">R' + (i + 1) + '</span><span class="b">' +
+        (poda ? seg(entero(r.l), COL_L) + seg(entero(r.c), COL_C) + seg(entero(r.sc), COL_SC) : seg(entero(r.f), COL_F)) + '</span>' +
+        '<span class="e">' + (poda ? "= " + fmt(brEq(f, entero(r.l), entero(r.c), entero(r.sc)), 1) : "") + '</span></div>';
+    });
+    if(poda){
+      const t = c.L + c.C + c.Sc || 1;
+      h += '<div class="fz-rama" style="margin-top:10px"><span class="r">Total</span><span class="b" style="height:26px">' +
+        [[c.L, COL_L], [c.C, COL_C], [c.Sc, COL_SC]].filter(x => x[0] > 0).map(x => '<i style="width:' + (x[0] / t * 100) + '%;background:' + x[1] + '">' + x[0] + '</i>').join("") + '</span><span class="e"></span></div>' +
+        '<div class="fz-ley"><span><span class="punto" style="background:' + COL_L + '"></span>Largos ' + fmt(c.L / t * 100, 0) + ' %</span><span><span class="punto" style="background:' + COL_C + '"></span>Cortos ' + fmt(c.C / t * 100, 0) + ' %</span><span><span class="punto" style="background:' + COL_SC + '"></span>Semicortos ' + fmt(c.Sc / t * 100, 0) + ' %</span>' + (f.ciruelo ? '<span>ciruelo: Sc ÷ 5</span>' : '') + '</div>';
+    } else if(a.br){
+      h += '<div class="fz-ley">Brindillos del árbol: L ' + a.br.l + ' · C ' + a.br.c + ' · Sc ' + a.br.sc + ' (' + fmt(c.eq, 1) + ' eq.)</div>';
+    }
+  }
+  if(a.corregido && a.originales){
+    const o = calcArbol(f, Object.assign({}, a, a.originales));
+    h += '<div style="font-size:12px;color:#8a5a00;background:#fff5e0;border-radius:8px;padding:8px 10px;margin-top:12px">Corregido en el móvil. Antes: fila ' + a.originales.fila + ' · árbol ' + a.originales.arbol + ' · ' + fmt(o.valor, poda ? 1 : 0) + ' ' + L.unidad + ' en ' + o.nR + ' ramas.</div>';
+  }
+  h += '<div class="fila-btn" style="margin-top:14px"><button class="btn s" onclick="cerrarFicha()">Cerrar</button><button class="btn" onclick="corregirDesdeFicha(\'' + a.id_local + '\')">Corregir este árbol</button></div>';
+  $("ficha").innerHTML = h;
+  $("ficha-velo").classList.add("on");
+  requestAnimationFrame(() => $("ficha").classList.add("on"));
+}
+function cerrarFicha(){ $("ficha").classList.remove("on"); $("ficha-velo").classList.remove("on"); }
+function corregirDesdeFicha(id){
+  const a = DATOS.arboles.find(x => x.id_local === id);
+  if(!a) return;
+  cerrarFicha();
+  const fa = formActivo();
+  if(!fa || fa.id_local !== a.form_id) continuarForm(a.form_id); else ir("contar");
+  editarArbol(id);
+}
+
+// ============================================================================
+// CONTEOS · LISTA Y SUBIDA
+// ============================================================================
+function estadoSubida(f){
+  if(!arbolesDe(f.id_local).length) return ['<span class="estado-sub" style="background:#eef0ef;color:#8b9295">vacío</span>', false];
+  if(!f.subido) return ['<span class="estado-sub" style="background:#fff0c2;color:#8a5a00">en el móvil</span>', true];
+  if(f.subido.version_id !== f.version_id) return ['<span class="estado-sub" style="background:#fff0c2;color:#8a5a00">cambiado tras subir (v' + f.subido.version + ')</span>', true];
+  return ['<span class="estado-sub" style="background:#dff0e2;color:' + VERDE + '">✓ subido · v' + f.subido.version + '</span>', false];
+}
+function pintarConteos(){
+  pintarBadge();
+  const fs = formsFinca().sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.creado || "").localeCompare(a.creado || ""));
+  const pend = fs.filter(pendienteSubir);
+  let h = '<div class="card" style="' + (pend.length ? "background:#fff5e0;border-color:#e6c98a" : "") + '">' +
+    (pend.length
+      ? '<div style="font-size:15px;font-weight:800;color:#7a5230">' + pend.length + ' conteo(s) por subir</div><div style="font-size:12px;color:#7a5230;margin-top:2px">Se suben enteros a la base. Si se corta, se vuelve a intentar sin duplicar.</div>' +
+        '<button class="btn" id="btn-subir" style="width:100%;margin-top:10px;font-size:17px;padding:15px" onclick="subirConteos()"' + (navigator.onLine ? '' : ' disabled') + '>⬆ Subir conteos (' + pend.length + ')</button>' +
+        (navigator.onLine ? '' : '<div style="font-size:12px;color:' + ALTO + ';margin-top:6px;text-align:center">Sin conexión: súbelos al llegar a la wifi.</div>')
+      : '<div style="font-size:14px;color:' + VERDE + ';font-weight:700">✓ Todo subido</div>') +
+    (PRUEBA ? '<div style="font-size:11px;color:#8b9295;margin-top:6px">Periodo de prueba: lo que se sube va marcado como prueba.</div>' : '') + '</div>';
+  if(!fs.length){ $("v-conteos").innerHTML = h + '<div class="vacio">Aún no hay conteos.</div>'; return; }
+  [["Abiertos", fs.filter(f => f.estado === "abierto")], ["Cerrados", fs.filter(f => f.estado !== "abierto")]].forEach(([tit, lista]) => {
+    if(!lista.length) return;
+    h += '<h2>' + tit + '</h2>';
+    lista.forEach(f => {
+      const as = arbolesDe(f.id_local), n = normaDe(f), g = grupo(f, as, n), L = LABOR[f.tipo], [est] = estadoSubida(f);
+      h += '<div class="card form-item ' + (f.estado === "abierto" ? "abierto" : "") + '">' +
+        '<div class="h"><b>' + esc(f.parcela) + ' · ' + L.txt + '</b>' + est + '</div>' +
+        '<div class="i">' + fechaCorta(f.fecha) + ' · ' + esc(f.contador || "") + ' · ' + as.length + ' árbol(es) · norma ' + (n ? textoRango(n.min, n.max) : "—") + (f.norma_editada ? ' <span class="tag edit">editada</span>' : '') + '</div>' +
+        (as.length ? '<div class="i" style="margin-top:4px;font-size:13px;color:#14181a">Media <b style="color:' + g.colorMedia + '">' + fmt(g.valor, 1) + '</b>' +
+          (n ? ' · <b style="color:' + g.colorMedia + '">' + textoDesvio(g, f.tipo) + '</b> · <span class="pill" style="background:' + colorCalidad(g.pctMargen) + ';color:#14181a">' + fmt(g.pctMargen, 0) + ' % con margen</span>' : '') +
+          ' · ' + fmt(g.nR, 1) + ' ramas</div>' + barraNorma(f, as) + tira(f, as) : '') +
+        '<div class="fila-btn">' +
+          '<button class="btn peq" onclick="continuarForm(\'' + f.id_local + '\')">' + (f.estado === "abierto" ? "Continuar" : "Reabrir") + '</button>' +
+          '<button class="btn s peq" onclick="verEnParcela(\'' + f.id_local + '\')">Mapa</button>' +
+          '<button class="btn s peq" onclick="pdfConteo(\'' + f.id_local + '\')">PDF</button>' +
+          '<button class="btn s peq" onclick="excelConteos([\'' + f.id_local + '\'])">Excel</button>' +
+          '<button class="btn peligro peq" onclick="borrarConteo(\'' + f.id_local + '\')">Borrar</button>' +
+        '</div></div>';
+    });
+  });
+  h += '<div style="text-align:center;margin:12px 0"><button class="btn s peq" onclick="excelTodo()">Excel de todo el móvil (copia)</button></div>';
+  $("v-conteos").innerHTML = h;
+}
+function verEnParcela(id){ const f = formPorId(id); if(!f) return; lsSet(K.vistaParcela, Object.assign(lsGet(K.vistaParcela, {}), {tipo: f.tipo, parcela: f.parcela, periodo: "todo"})); ir("parcela"); }
+async function borrarConteo(id){
+  const f = formPorId(id);
+  if(!f) return;
+  const n = arbolesDe(id).length, sub = !!f.subido;
+  if(!await pregunta("Borrar conteo", "<b>" + esc(f.parcela) + " · " + LABOR[f.tipo].txt + " · " + fechaCorta(f.fecha) + "</b> con " + n + " árbol(es).<br><br>" +
+    (sub ? "Se borra solo de este móvil. En la base sigue lo que ya se subió." : "<b>No está subido: si lo borras, se pierde.</b>"), "Borrar", "Cancelar", true)) return;
+  if(!sub && n > 0 && !await pregunta("¿Seguro?", "Última confirmación: se pierden " + n + " árbol(es).", "Sí, borrar", "Cancelar", true)) return;
+  try{ await dbBorrarForm(id); } catch(e){ await alerta("No se pudo borrar", esc(e.message)); return; }
+  DATOS.forms = DATOS.forms.filter(x => x.id_local !== id);
+  DATOS.arboles = DATOS.arboles.filter(a => a.form_id !== id);
+  if(lsGet(K.formActivo, null) === id){ localStorage.removeItem(K.formActivo); S.cap = null; }
+  aviso("Conteo borrado del móvil");
+  pintarConteos();
+}
+function cargaSubida(f){
+  const as = arbolesDe(f.id_local);
+  return {
+    id_conteo: f.uuid, id_version: f.version_id, tipo: f.tipo, parcela: f.parcela, fecha: f.fecha,
+    inicio_at: f.creado, fin_at: f.cerrado || null, contador: f.contador || null, dispositivo: f.dispositivo || dispositivo(), version_app: VERSION,
+    prueba: PRUEBA, ciruelo: !!f.ciruelo,
+    norma: {min: f.norma ? f.norma.min : null, max: f.norma ? f.norma.max : null},
+    norma_original: f.norma_original || null, norma_editada: !!f.norma_editada,
+    arboles: as.map(a => ({
+      id: a.uuid, n_orden: a.n_orden, fila: a.fila, arbol: a.arbol, bateria: a.bateria,
+      lat: a.lat, lon: a.lon, precision: a.precision, contado_at: a.contado_at || a.creado,
+      corregido: !!a.corregido, originales: a.originales || null,
+      br: a.br || null,
+      ramas: (a.sin_ramas ? [] : a.ramas).map(r => f.tipo === "poda" ? {l: entero(r.l), c: entero(r.c), sc: entero(r.sc)} : {f: entero(r.f)})
+    }))
+  };
+}
+async function subirConteos(){
+  if(S.subiendo) return;
+  if(!navigator.onLine){ aviso("Sin conexión"); return; }
+  const pend = formsFinca().filter(pendienteSubir);
+  if(!pend.length){ aviso("Nada por subir"); return; }
+  try{ await conToken("Para subir los conteos hay que entrar con la cuenta de campo."); }
+  catch(e){ aviso(e.message); return; }
+  S.subiendo = true;
+  const btn = $("btn-subir");
+  let ok = 0;
+  const errores = [];
+  for(const f of pend){
+    if(btn){ btn.disabled = true; btn.textContent = "Subiendo " + (ok + errores.length + 1) + " de " + pend.length + "…"; }
+    try{
+      const r = await rpc("app_subir_conteo", {p: cargaSubida(f)});
+      f.subido = {version_id: f.version_id, version: r.version, id_conteo: r.id_conteo, at: ahoraISO()};
+      await guardarForm(f, true);
+      ok++;
+    } catch(e){ errores.push(f.parcela + ": " + e.message); }
+  }
+  S.subiendo = false;
+  pintarConteos();
+  if(errores.length) alerta("Subida con errores", ok + " subido(s) · " + errores.length + " con error. Lo que falló sigue en el móvil: vuelve a intentarlo.<br><br><span style='font-size:12px'>" + errores.slice(0, 3).map(esc).join("<br>") + "</span>");
+  else aviso("✓ " + ok + " conteo(s) subido(s) a la base");
+}
+
+// ---------- Excel ----------
+function excelConteos(ids, nombre){
+  if(typeof XLSX === "undefined"){ aviso("Falta la librería de Excel: abre la app una vez con conexión"); return; }
+  const fs = ids.map(formPorId).filter(Boolean);
+  if(!fs.length){ aviso("No hay conteos"); return; }
+  const hC = [], hA = [];
+  fs.forEach(f => {
+    const as = arbolesDe(f.id_local), n = normaDe(f), g = grupo(f, as, n);
+    hC.push({conteo: f.uuid, finca: f.finca_nombre, parcela: f.parcela, labor: LABOR[f.tipo].txt, fecha: f.fecha, contador: f.contador, ciruelo: f.ciruelo ? "sí" : "no",
+      norma_desde: n ? n.min : null, norma_hasta: n ? n.max : null, norma_editada: f.norma_editada ? "sí" : "no", arboles: as.length,
+      media: g.valor != null ? +g.valor.toFixed(2) : null, pct_con_margen: g.pctMargen != null ? +g.pctMargen.toFixed(1) : null, pct_en_norma: g.pctNorma != null ? +g.pctNorma.toFixed(1) : null,
+      desvio_medio: g.desvMedio != null ? +g.desvMedio.toFixed(2) : null, desvio_sin_signo: g.desvAbs != null ? +g.desvAbs.toFixed(2) : null,
+      subido: f.subido ? "v" + f.subido.version : "no", estado: f.estado});
+    as.forEach(a => {
+      const c = calcArbol(f, a), gr = grado(c.valor, n);
+      const fila = {conteo: f.uuid, parcela: f.parcela, labor: LABOR[f.tipo].txt, fecha: f.fecha, n_orden: a.n_orden, fila: a.fila, arbol: a.arbol, bateria: a.bateria,
+        ramas: c.nR, valor: +c.valor.toFixed(2), desvio: gr ? +gr.desvio.toFixed(2) : null, grado: gr ? gr.g : null, lat: a.lat, lon: a.lon, precision_m: a.precision, corregido: a.corregido ? "sí" : "no"};
+      for(let i = 0; i < MAX_RAMAS; i++){ const r = a.ramas[i]; if(f.tipo === "poda"){ fila["R" + (i + 1) + "_L"] = r ? r.l : null; fila["R" + (i + 1) + "_C"] = r ? r.c : null; fila["R" + (i + 1) + "_SC"] = r ? r.sc : null; } else fila["R" + (i + 1)] = r ? r.f : null; }
+      hA.push(fila);
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hC), "Conteos");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hA.length ? hA : [{}]), "Arboles");
+  const nom = nombre || ("CONTEO_" + (fs.length === 1 ? fs[0].parcela + "_" + fs[0].tipo + "_" + fs[0].fecha : hoyISO()) + ".xlsx");
+  XLSX.writeFile(wb, nom);
+  aviso("Excel descargado");
+}
+function excelTodo(){ const ids = DATOS.forms.map(f => f.id_local); if(!ids.length){ aviso("No hay conteos"); return; } excelConteos(ids, "CONTEOS_COPIA_" + hoyISO() + ".xlsx"); }
+
+// ---------- PDF ----------
+function pdfConteo(id){
+  const f = formPorId(id);
+  if(!f) return;
+  if(!window.jspdf){ aviso("Falta la librería de PDF: abre la app una vez con conexión"); return; }
+  const as = arbolesDe(id);
+  if(!as.length){ aviso("El conteo no tiene árboles"); return; }
+  try{
+    const {jsPDF} = window.jspdf;
+    const doc = new jsPDF({orientation: "landscape", unit: "mm", format: "a4"});
+    const PW = 297, PH = 210, MG = 12, L = LABOR[f.tipo], poda = f.tipo === "poda", n = normaDe(f), g = grupo(f, as, n);
+    const rgb = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+    const cab = () => {
+      doc.setFillColor(11, 110, 79); doc.rect(0, 0, PW, 20, "F");
+      doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(14);
+      doc.text((f.finca_nombre || "") + " · " + f.parcela + " · Conteo de " + L.txt.toLowerCase() + (f.ciruelo ? " (ciruelo)" : ""), MG, 9);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9);
+      doc.text(fechaCorta(f.fecha) + "   ·   Contó: " + (f.contador || "") + "   ·   Norma: " + (n ? textoRango(n.min, n.max) : "sin norma") + (f.norma_editada ? " (editada en campo)" : ""), MG, 15);
+    };
+    cab();
+    let y = 26;
+    const cajas = [["Árboles", String(g.n), null], ["Media " + L.valor, fmt(g.valor, 1), g.colorMedia], ["Desvío medio", n ? textoDesvio(g, f.tipo).replace("↓", "-").replace("↑", "+") : "—", g.colorMedia],
+      ["Con margen ±5 %", g.pctMargen != null ? fmt(g.pctMargen, 0) + " %" : "—", g.pctMargen != null ? colorCalidad(g.pctMargen) : null], ["En norma", g.pctNorma != null ? fmt(g.pctNorma, 0) + " %" : "—", null], ["Ramas por árbol", fmt(g.nR, 1), null]];
+    const cw = (PW - 2 * MG) / cajas.length;
+    cajas.forEach((cj, i) => {
+      const x = MG + i * cw;
+      doc.setFillColor(245, 247, 246); doc.roundedRect(x, y, cw - 3, 14, 2, 2, "F");
+      doc.setFontSize(7); doc.setTextColor(90, 100, 103); doc.text(cj[0].toUpperCase(), x + 3, y + 4.5);
+      const c = cj[2] ? rgb(cj[2]) : [20, 24, 26];
+      doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.setTextColor(c[0], c[1], c[2]); doc.text(cj[1], x + 3, y + 11); doc.setFont("helvetica", "normal");
+    });
+    y += 21;
+    const nRm = Math.max(1, ...as.map(a => a.ramas.length));
+    const cols = [{t: "Nº", w: 9}, {t: "Fila", w: 10}, {t: "Árbol", w: 11}];
+    for(let i = 0; i < nRm; i++) cols.push({t: "R" + (i + 1) + (poda ? " L·C·Sc" : ""), w: poda ? 19 : 11});
+    if(poda) cols.push({t: "L", w: 9}, {t: "C", w: 9}, {t: "Sc", w: 9}, {t: "Br eq.", w: 14}, {t: "Desvío", w: 13}, {t: "Ramas", w: 11}, {t: "% L", w: 10});
+    else cols.push({t: "Frutos", w: 13}, {t: "Desvío", w: 13}, {t: "Ramas", w: 11}, {t: "Br L·C·Sc", w: 19}, {t: "Fr/br", w: 11});
+    const k = Math.min(1, (PW - 2 * MG) / cols.reduce((s, c) => s + c.w, 0));
+    cols.forEach(c => { c.w *= k; });
+    const iV = poda ? cols.length - 4 : cols.length - 5;
+    const cabT = () => {
+      doc.setFillColor(242, 244, 243); doc.rect(MG, y - 4, PW - 2 * MG, 6, "F");
+      doc.setFont("helvetica", "bold"); doc.setFontSize(7); doc.setTextColor(91, 100, 103);
+      let x = MG; cols.forEach(c => { doc.text(c.t, x + c.w - 1, y, {align: "right"}); x += c.w; });
+      doc.setFont("helvetica", "normal"); y += 5;
+    };
+    cabT();
+    as.forEach(a => {
+      if(y > PH - 14){ doc.addPage(); cab(); y = 28; cabT(); }
+      const c = calcArbol(f, a), gr = grado(c.valor, n);
+      const v = [String(a.n_orden), String(a.fila), String(a.arbol)];
+      for(let i = 0; i < nRm; i++){ const r = a.ramas[i]; v.push(r ? (poda ? r.l + "·" + r.c + "·" + r.sc : String(r.f)) : ""); }
+      const dtxt = gr ? (gr.g === 0 ? "ok" : (gr.desvio > 0 ? "+" : "-") + fmt(Math.abs(gr.desvio), 0)) : "";
+      if(poda) v.push(String(c.L), String(c.C), String(c.Sc), fmt(c.valor, 1), dtxt, String(c.nR), fmt(c.pctLargos, 0));
+      else v.push(String(c.F), dtxt, String(c.nR), a.br ? a.br.l + "·" + a.br.c + "·" + a.br.sc : "", fmt(c.frutosBr, 1));
+      doc.setFontSize(8); doc.setTextColor(20, 24, 26);
+      let x = MG;
+      cols.forEach((col, i) => {
+        if(i === iV){ const q = rgb(colorGrado(gr)); doc.setFillColor(q[0], q[1], q[2]); doc.circle(x + 2.2, y - 1.1, 1.3, "F"); doc.setFont("helvetica", "bold"); }
+        if(c.nR < 6 && col.t === "Ramas") doc.setTextColor(168, 58, 58);
+        doc.text(v[i] || "", x + col.w - 1, y, {align: "right"});
+        doc.setFont("helvetica", "normal"); doc.setTextColor(20, 24, 26);
+        x += col.w;
+      });
+      doc.setDrawColor(235, 235, 235); doc.line(MG, y + 1.5, PW - MG, y + 1.5);
+      y += 5.5;
+    });
+    const conGps = as.filter(a => a.lat != null), poly = poligonos()[f.parcela];
+    if(conGps.length && poly){
+      doc.addPage(); cab();
+      const top = 26, alto = PH - top - 14, ancho = PW - 2 * MG;
+      doc.setFontSize(10); doc.setTextColor(20, 24, 26); doc.setFont("helvetica", "bold"); doc.text("Situación de los árboles contados", MG, top); doc.setFont("helvetica", "normal");
+      const lons = poly.map(p => p[0]).concat(conGps.map(a => a.lon)), lats = poly.map(p => p[1]).concat(conGps.map(a => a.lat));
+      const o = Math.min(...lons), e = Math.max(...lons), s = Math.min(...lats), nn = Math.max(...lats);
+      const kx = Math.cos((s + nn) / 2 * Math.PI / 180), aw = (e - o) * kx || 1e-5, ah = (nn - s) || 1e-5;
+      const sc = Math.min(ancho / aw, (alto - 6) / ah) * 0.92, ox = MG + (ancho - aw * sc) / 2, oy = top + 4 + (alto - 6 - ah * sc) / 2;
+      const px = lon => ox + (lon - o) * kx * sc, py = lat => oy + (nn - lat) * sc;
+      doc.setDrawColor(200, 205, 203); doc.rect(MG, top + 3, ancho, alto - 3);
+      doc.setDrawColor(11, 110, 79); doc.setLineWidth(0.6);
+      for(let i = 0; i < poly.length; i++){ const p1 = poly[i], p2 = poly[(i + 1) % poly.length]; doc.line(px(p1[0]), py(p1[1]), px(p2[0]), py(p2[1])); }
+      doc.setLineWidth(0.2);
+      conGps.forEach(a => {
+        const q = rgb(colorGrado(grado(calcArbol(f, a).valor, n)));
+        doc.setFillColor(q[0], q[1], q[2]); doc.setDrawColor(255, 255, 255); doc.circle(px(a.lon), py(a.lat), 1.8, "FD");
+        doc.setFontSize(6); doc.setTextColor(20, 24, 26); doc.text(String(a.n_orden), px(a.lon) + 2.2, py(a.lat) + 0.8);
+      });
+      doc.setFontSize(7); doc.setTextColor(90, 100, 103);
+      doc.text("Verde: en norma. Ámbar: por debajo. Rojo: por encima (suave si se sale hasta un 5 %). Números = nº de árbol. Posición GPS aproximada.", MG, PH - 8);
+    }
+    const tp = doc.internal.getNumberOfPages();
+    for(let p = 1; p <= tp; p++){ doc.setPage(p); doc.setFontSize(7); doc.setTextColor(150, 150, 150); doc.text("Conteos " + VERSION + " · " + f.uuid + " · " + new Date().toLocaleString("es-ES"), MG, PH - 4); doc.text("Pág. " + p + "/" + tp, PW - MG, PH - 4, {align: "right"}); }
+    doc.save("CONTEO_" + f.tipo.toUpperCase() + "_" + f.parcela + "_" + f.fecha + ".pdf");
+    aviso("PDF descargado");
+  } catch(e){ console.error(e); alerta("No se pudo hacer el PDF", esc(e.message || e)); }
+}
+
+// ============================================================================
+// IMÁGENES DE SATÉLITE
+// ============================================================================
+let _dbT = null;
+function tAbrir(){
+  if(_dbT) return Promise.resolve(_dbT);
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open("conteos.tiles", 1);
+    rq.onupgradeneeded = e => { const db = e.target.result; if(!db.objectStoreNames.contains("tiles")) db.createObjectStore("tiles"); };
+    rq.onsuccess = e => { _dbT = e.target.result; res(_dbT); };
+    rq.onerror = e => rej(e.target.error);
+  });
+}
+async function tGet(k){ const db = await tAbrir(); return new Promise((res, rej) => { const rq = db.transaction("tiles").objectStore("tiles").get(k); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); }); }
+async function tPut(k, b){ const db = await tAbrir(); return new Promise((res, rej) => { const tx = db.transaction("tiles", "readwrite"); tx.objectStore("tiles").put(b, k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); }
+async function tCount(){ const db = await tAbrir(); return new Promise((res, rej) => { const rq = db.transaction("tiles").objectStore("tiles").count(); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); }); }
+async function tClear(){ const db = await tAbrir(); return new Promise((res, rej) => { const tx = db.transaction("tiles", "readwrite"); tx.objectStore("tiles").clear(); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); }
+function tileKey(z, x, y){ return "pnoa_" + z + "_" + x + "_" + y; }
+function tileURL(z, x, y){ return "https://www.ign.es/wmts/pnoa-ma?request=GetTile&service=WMTS&version=1.0.0&Format=image/jpeg&layer=OI.OrthoimageCoverage&style=default&tilematrixset=GoogleMapsCompatible&TileMatrix=" + z + "&TileRow=" + y + "&TileCol=" + x; }
+function lonLatATile(lon, lat, z){ const n = Math.pow(2, z), r = lat * Math.PI / 180; return {x: Math.floor((lon + 180) / 360 * n), y: Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n)}; }
+function tilesDeFinca(){
+  const set = new Set(), lista = [];
+  gruposParcelas().forEach(g => {
+    const lons = g.poly.map(p => p[0]), lats = g.poly.map(p => p[1]);
+    const o = Math.min(...lons), e = Math.max(...lons), s = Math.min(...lats), n = Math.max(...lats);
+    for(let z = ZOOM_MIN; z <= ZOOM_MAX; z++){
+      const a = lonLatATile(o, n, z), b = lonLatATile(e, s, z), m = z >= 17 ? 1 : 0;
+      for(let x = Math.min(a.x, b.x) - m; x <= Math.max(a.x, b.x) + m; x++) for(let y = Math.min(a.y, b.y) - m; y <= Math.max(a.y, b.y) + m; y++){
+        const k = tileKey(z, x, y); if(!set.has(k)){ set.add(k); lista.push({z, x, y, k}); }
+      }
+    }
+  });
+  return lista;
+}
+function crearCapaTiles(){
+  const capa = L.tileLayer("", {maxZoom: 20, maxNativeZoom: navigator.onLine ? 19 : ZOOM_MAX, attribution: "© IGN España · PNOA"});
+  capa.createTile = function(coords, done){
+    const img = document.createElement("img"); img.alt = "";
+    const {z, x, y} = coords;
+    const red = () => { img.onload = () => done(null, img); img.onerror = e => done(e, img); img.src = tileURL(z, x, y); };
+    tGet(tileKey(z, x, y)).then(blob => {
+      if(blob){ img.onload = () => { URL.revokeObjectURL(img.src); done(null, img); }; img.onerror = red; img.src = URL.createObjectURL(blob); }
+      else red();
+    }).catch(red);
+    return img;
+  };
+  return capa;
+}
+
+// ============================================================================
+// ⚙ CONFIGURACIÓN DEL MÓVIL (técnico, con PIN)
+// ============================================================================
+let PRECARGA = {activa: false, cancelar: false};
+async function pintarConfig(){
+  const c = $("v-config");
+  if(!S.tecnico){
+    c.innerHTML = '<div class="card" style="padding:18px"><div style="font-size:16px;font-weight:800">Configuración del móvil</div><div style="font-size:13px;color:#5b6467;margin:4px 0 10px">Solo para el técnico.</div>' +
+      '<input id="pin" type="password" inputmode="numeric" placeholder="PIN" style="width:100%;padding:12px;border:1px solid #d5dad8;border-radius:8px;font-size:18px" onkeydown="if(event.key===\'Enter\')entrarTecnico()">' +
+      '<div class="fila-btn"><button class="btn s" onclick="ir(\'contar\')">Volver</button><button class="btn" onclick="entrarTecnico()">Entrar</button></div></div>';
+    setTimeout(() => { const p = $("pin"); if(p) p.focus(); }, 100);
+    return;
+  }
+  const s = sesion(), d = datosFinca();
+  let nT = 0; try{ nT = await tCount(); } catch(e){}
+  let est = "";
+  try{ if(navigator.storage && navigator.storage.estimate){ const e = await navigator.storage.estimate(); const p = navigator.storage.persisted ? await navigator.storage.persisted() : null; est = (e.usage / 1048576).toFixed(0) + " MB usados" + (p === false ? " · almacenamiento no protegido (instala la app)" : p ? " · almacenamiento protegido" : ""); } } catch(e){}
+  let h = '<h2>Configuración del móvil</h2>';
+  h += '<div class="card"><div style="font-weight:800">1. Cuenta</div><div style="font-size:13px;color:#5b6467;margin-top:3px">' + (s ? "Conectado como <b>" + esc(s.email) + "</b>. La sesión se renueva sola." : "Sin sesión.") + '</div>' +
+    '<div class="fila-btn">' + (s ? '<button class="btn s peq" onclick="cerrarSesion()">Cerrar sesión</button>' : '<button class="btn" onclick="entrarCuenta()">Entrar</button>') + '</div></div>';
+  h += '<div class="card"><div style="font-weight:800">2. Finca de este móvil</div>' +
+    (d ? '<div style="font-size:14px;margin-top:4px"><b>' + esc(d.finca.nombre) + '</b> · campaña ' + esc(d.campanya) + ' · ' + d.parcelas.length + ' parcelas · descargada ' + new Date(d.ts).toLocaleString("es-ES", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) +
+          '<br><span style="font-size:12px;color:#5b6467">' + d.parcelas.filter(p => p.norma && p.norma.poda).length + ' con norma de poda · ' + d.parcelas.filter(p => p.norma && p.norma.aclareo).length + ' con norma de aclareo · ' + d.parcelas.filter(p => p.ciruelo).length + ' ciruelo · ' + nT.toLocaleString("es-ES") + ' imágenes de satélite</span></div>' : '<div style="font-size:13px;color:' + ALTO + ';margin-top:4px">Sin configurar.</div>') +
+    '<div id="cfg-fincas"></div>' +
+    '<div class="fila-btn"><button class="btn" onclick="elegirFinca()">' + (d ? "Cambiar finca" : "Elegir finca") + '</button>' + (d ? '<button class="btn s" onclick="prepararFinca(\'' + esc(d.finca.codigo) + '\')">Actualizar planos, normas y satélite</button>' : '') + '</div></div>';
+  h += '<div class="card"><div style="font-weight:800">3. Datos de este móvil</div><div style="font-size:13px;color:#5b6467;margin-top:3px">' + DATOS.forms.length + ' conteo(s) · ' + DATOS.arboles.length + ' árbol(es) · ' + nPendientes() + ' por subir' + (est ? '<br>' + est : '') + '</div>' +
+    '<div class="fila-btn"><button class="btn s peq" onclick="excelTodo()">Excel de todo</button><button class="btn s peq" onclick="actualizarApp()">Actualizar app</button><button class="btn peligro peq" onclick="borrarSatelite()">Borrar satélite</button></div>' +
+    '<div style="font-size:11px;color:#8b9295;margin-top:8px">Versión ' + VERSION + (PRUEBA ? ' (prueba)' : '') + ' · dispositivo ' + esc(dispositivo()) + '</div></div>';
+  h += '<button class="btn" style="width:100%;margin-top:6px" onclick="ir(\'contar\')">Listo · volver a Contar</button>';
+  c.innerHTML = h;
+}
+function entrarTecnico(){ if(($("pin").value || "").trim() !== PIN_TECNICO){ aviso("PIN incorrecto"); return; } S.tecnico = true; pintarConfig(); }
+async function entrarCuenta(){ if(await pedirLogin("Con la cuenta de campo.")) pintarConfig(); }
+function cerrarSesion(){ localStorage.removeItem(K.sesion); aviso("Sesión cerrada. Los conteos del móvil se conservan."); pintarConfig(); }
+async function elegirFinca(){
+  const el = $("cfg-fincas");
+  el.innerHTML = '<div style="font-size:13px;color:#5b6467;margin-top:8px">Cargando fincas…</div>';
+  let lista;
+  try{ lista = await rpc("app_fincas", {}); }
+  catch(e){ el.innerHTML = '<div class="err" style="display:block">' + esc(e.message) + '</div>'; return; }
+  el.innerHTML = '<select class="grande" style="margin-top:8px" onchange="if(this.value)prepararFinca(this.value)"><option value="">- Elige finca -</option>' +
+    lista.map(f => '<option value="' + esc(f.codigo) + '">' + esc(f.nombre) + (f.provincia ? " (" + esc(f.provincia) + ")" : "") + '</option>').join("") + '</select>';
+}
+async function prepararFinca(codigo){
+  if(!navigator.onLine){ await alerta("Sin conexión", "Para preparar la finca hace falta conexión (mejor wifi)."); return; }
+  if(PRECARGA.activa) return;
+  const ant = fincaCodigo();
+  if(ant && ant !== codigo){
+    const abiertos = formsFinca().filter(f => f.estado === "abierto").length, pend = nPendientes();
+    if((abiertos || pend) && !await pregunta("Cambiar de finca", "En la finca actual hay " + abiertos + " conteo(s) abierto(s) y " + pend + " por subir. No se borran: vuelven a verse al volver a esa finca.", "Cambiar", "Cancelar")) return;
+    localStorage.removeItem(K.formActivo); S.cap = null;
+  }
+  abrirHoja('<h3>Preparando la finca</h3><div id="pf-1" style="font-size:14px">1. Parcelas, planos y normas…</div>' +
+    '<div id="pf-2" style="font-size:14px;margin-top:8px;color:#8b9295">2. Imágenes de satélite</div><div class="barra"><i id="pf-bar"></i></div>' +
+    '<div id="pf-det" style="font-size:12px;color:#5b6467;margin-top:6px"></div><div class="fila-btn" id="pf-acc"><button class="btn s" onclick="PRECARGA.cancelar=true">Detener</button></div>');
+  PRECARGA = {activa: true, cancelar: false};
+  try{
+    let d;
+    try{ d = await descargarFinca(codigo); }
+    catch(e){ $("pf-1").innerHTML = '1. <b style="color:' + ALTO + '">' + esc(e.message) + '</b>'; $("pf-acc").innerHTML = '<button class="btn" onclick="cerrarHoja()">Cerrar</button>'; return; }
+    S.mapa = null;
+    $("pf-1").innerHTML = '1. <b style="color:' + VERDE + '">' + esc(d.finca.nombre) + ': ' + d.parcelas.length + ' parcelas ✓</b>';
+    $("pf-2").style.color = "";
+    const tiles = tilesDeFinca(), total = tiles.length;
+    let hechos = 0, ya = 0, errores = 0, bytes = 0, cursor = 0;
+    const t0 = Date.now();
+    const pintar = () => {
+      const p = hechos + ya + errores;
+      $("pf-bar").style.width = Math.round(p / total * 100) + "%";
+      $("pf-det").textContent = p + " de " + total + " · " + (bytes / 1048576).toFixed(1) + " MB" + (ya ? " · " + ya + " ya estaban" : "") + (errores ? " · " + errores + " fallos" : "") + (p < total && p ? " · quedan ~" + Math.round((Date.now() - t0) / 1000 / p * (total - p)) + " s" : "");
+    };
+    const trab = async () => {
+      while(!PRECARGA.cancelar && cursor < total){
+        const t = tiles[cursor++];
+        try{
+          if(await tGet(t.k)) ya++;
+          else { const r = await fetch(tileURL(t.z, t.x, t.y)); if(!r.ok) errores++; else { const b = await r.blob(); bytes += b.size; await tPut(t.k, b); hechos++; } }
+        } catch(e){ errores++; }
+        if((hechos + ya + errores) % 5 === 0 || cursor >= total) pintar();
+      }
+    };
+    await Promise.all(Array.from({length: 6}, trab));
+    pintar();
+    $("pf-2").innerHTML = '2. ' + (PRECARGA.cancelar ? '<b style="color:' + BAJO + '">detenido (se guarda lo descargado)</b>' : errores ? '<b style="color:' + BAJO + '">' + (total - errores) + ' de ' + total + '</b> · repite para completar' : '<b style="color:' + VERDE + '">' + total + ' imágenes ✓</b>');
+    $("pf-acc").innerHTML = '<button class="btn" onclick="cerrarHoja();pintarConfig()">Listo</button>';
+    pintarBadge();
+  } finally { PRECARGA.activa = false; }
+}
+async function borrarSatelite(){
+  if(!await pregunta("Borrar imágenes de satélite", "Se borran las imágenes guardadas (los conteos no se tocan).", "Borrar", "Cancelar", true)) return;
+  await tClear(); aviso("Imágenes borradas"); pintarConfig();
+}
+async function actualizarApp(){
+  if(!await pregunta("Actualizar app", "Se descarga la última versión. Los conteos, la finca y las imágenes no se borran.", "Actualizar", "Cancelar")) return;
+  try{
+    if("serviceWorker" in navigator){ const r = await navigator.serviceWorker.getRegistration("./"); if(r) await r.unregister(); }
+    if("caches" in window){ const ks = await caches.keys(); await Promise.all(ks.filter(k => k.startsWith("conteos-")).map(k => caches.delete(k))); }
+  } catch(e){}
+  setTimeout(() => location.reload(), 300);
+}
+
+// ============================================================================
+// ARRANQUE
+// ============================================================================
+document.querySelectorAll("#teclado .keys button").forEach(b => b.addEventListener("click", () => tecla(b.dataset.k)));
+window.addEventListener("online", () => { pintarRed(); if(S.vista === "conteos") pintarConteos(); refrescoSilencioso(); });
+window.addEventListener("offline", () => { pintarRed(); if(S.vista === "conteos") pintarConteos(); });
+
+async function init(){
+  pintarRed(); pintarCabecera();
+  try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch(e){}
+  try{ await cargarDatos(); }
+  catch(e){ await alerta("El móvil no deja guardar datos", "No se puede usar el almacenamiento del navegador (" + esc(e.message || e) + "). Sal del modo incógnito o usa Chrome."); }
+  pintarBadge();
+  try{ if(navigator.permissions){ const p = await navigator.permissions.query({name: "geolocation"}); if(p.state === "granted") iniciarGPS(false); } } catch(e){}
+  if(datosFinca()) iniciarGPS(false);
+  const f = formActivo();
+  if(f) S.cap = nuevaCaptura(f);
+  ir("contar");
+  refrescoSilencioso();
+}
+if("serviceWorker" in navigator){
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").then(reg => {
+      reg.addEventListener("updatefound", () => { const n = reg.installing; if(n) n.addEventListener("statechange", () => { if(n.state === "installed" && navigator.serviceWorker.controller) bannerVersion(reg); }); });
+      setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+    }).catch(e => console.warn("SW:", e));
+    let rec = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => { if(rec) return; rec = true; location.reload(); });
+  });
+}
+function bannerVersion(reg){
+  if($("banner-version")) return;
+  const d = document.createElement("div");
+  d.id = "banner-version";
+  d.style.cssText = "position:fixed;top:0;left:0;right:0;background:#f4c430;color:#5b4600;padding:10px;z-index:99970;display:flex;justify-content:center;align-items:center;gap:10px;font-size:13px;font-weight:700";
+  d.innerHTML = '<span>Hay una versión nueva</span><button style="background:#5b4600;color:#fff;border:none;padding:7px 12px;border-radius:6px;font-weight:700">Actualizar</button>';
+  d.querySelector("button").onclick = () => { if(reg.waiting) reg.waiting.postMessage({type: "SKIP_WAITING"}); else location.reload(); };
+  document.body.appendChild(d);
+}
+init();
+</script>
+</body>
+</html>
