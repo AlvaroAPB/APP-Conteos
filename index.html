@@ -288,7 +288,7 @@ table.lista tr.edit{background:#fff5e0}
 // ============================================================================
 // CONFIGURACIÓN
 // ============================================================================
-const VERSION = "v2d";
+const VERSION = "v2f";
 const PRUEBA = true;                    // todo lo que se sube va marcado como prueba
 const PIN_TECNICO = "2468";
 const SUPABASE_URL = "https://api-camposatroyal.duckdns.org";
@@ -298,6 +298,7 @@ const EMAIL_DEFECTO = "campo@royal.es";
 const MAX_RAMAS = 9;
 const ZOOM_MIN = 15, ZOOM_MAX = 18;
 const MARGEN_MIN_M = 15, MARGEN_MAX_M = 30, PRECISION_MAX_M = 50;
+const GPS_BUENO_M = 10, GPS_ESPERA_MS = 4000, GPS_FRESCO_MS = 4000;
 const MARGEN_NORMA = 5;                 // % de tolerancia (como el dashboard)
 const TOPE_RAMA = {l: 40, c: 40, sc: 30, f: 150};   // aviso en los primeros árboles
 const VECES_AVISO = 3;                  // aviso si un valor supera 3 veces la media del conteo
@@ -355,6 +356,14 @@ function aviso(msg){
   clearTimeout(_toastT);
   _toastT = setTimeout(() => t.classList.remove("on"), 2800);
 }
+function avisoFijo(msg){
+  const t = $("toast");
+  clearTimeout(_toastT);
+  t.textContent = msg;
+  t.classList.toggle("bajo", $("teclado").style.display !== "block");
+  t.classList.add("on");
+}
+function quitarAvisoFijo(){ $("toast").classList.remove("on"); }
 function modal(opts){
   return new Promise(res => {
     const prev = $("modal");
@@ -587,7 +596,7 @@ function gruposParcelas(){
 function pintarCabecera(){
   const d = datosFinca();
   $("cab-finca").textContent = d && d.finca ? "Conteos · " + d.finca.nombre : "Conteos";
-  $("cab-sub").textContent = new Date().toLocaleDateString("es-ES", {weekday: "long", day: "2-digit", month: "long"}) + (d ? " · campaña " + d.campanya : "");
+  $("cab-sub").textContent = new Date().toLocaleDateString("es-ES", {weekday: "long", day: "2-digit", month: "long"}) + (d ? " · campaña " + d.campanya : "") + " · " + VERSION;
   const c = contadorHoy(), ch = $("chip-contador");
   ch.style.display = d ? "" : "none";
   ch.textContent = "👤 " + (c || "¿quién?");
@@ -667,17 +676,59 @@ function iniciarGPS(manual){
   if(S.gpsWatch != null){ if(manual && S.gps) aviso("GPS ±" + S.gps.prec + " m"); if(!manual) return; try{ navigator.geolocation.clearWatch(S.gpsWatch); } catch(e){} }
   pintarChipGPS("buscando");
   S.gpsWatch = navigator.geolocation.watchPosition(onGPS, err => {
+    S.gpsError = err.code;
     pintarChipGPS("error");
     if(manual || err.code === 1) aviso("GPS: " + (err.code === 1 ? "permiso denegado. Autoriza la ubicación en los ajustes." : err.code === 2 ? "activa la ubicación del móvil." : "sin señal todavía."));
-  }, {enableHighAccuracy: true, maximumAge: 5000, timeout: 60000});
+  }, {enableHighAccuracy: true, maximumAge: 0, timeout: 60000});
 }
 function onGPS(pos){
   S.gps = {lat: pos.coords.latitude, lon: pos.coords.longitude, prec: Math.round(pos.coords.accuracy), ts: Date.now()};
+  S.gpsError = null;
   pintarChipGPS("ok");
   const cap = S.cap;
-  if(cap && cap.iniciado && !cap.edit && (!cap.gps || S.gps.prec < cap.gps.prec)) cap.gps = Object.assign({}, S.gps);
   if(S.vista === "contar"){ if(formActivo()){ pintarGPSArbol(); pintarFranja(); } else pintarSugerencia(); }
   if(S.vista === "parcela") pintarGPSMapa();
+}
+function espera(ms){ return new Promise(r => setTimeout(r, ms)); }
+function gpsFresco(ms){ return S.gps && Date.now() - S.gps.ts <= ms ? S.gps : null; }
+function gpsUtil(){ const g = gpsFresco(30000); return !!(g && g.prec <= PRECISION_MAX_M); }
+async function esperarGPS(ms){ const t0 = Date.now(); while(Date.now() - t0 < ms){ if(gpsUtil()) return true; await espera(250); } return gpsUtil(); }
+async function asegurarGPS(){
+  iniciarGPS(false);
+  if(gpsUtil()) return true;
+  if(S.gpsError !== 1){ avisoFijo("📍 Buscando GPS…"); await esperarGPS(6000); quitarAvisoFijo(); if(gpsUtil()) return true; }
+  const denegado = S.gpsError === 1;
+  const r = await modal({titulo: "Activa el GPS",
+    html: denegado ? "La app no tiene permiso de ubicación. Dale permiso en los ajustes del móvil y vuelve a pulsar <b>Empezar</b>."
+                   : "Todavía no hay señal GPS. Comprueba que la <b>ubicación del móvil</b> está activada.<br>Sin GPS los árboles no salen en el mapa.",
+    botones: (denegado ? [] : [{texto: "Esperar al GPS", valor: "esperar"}]).concat([{texto: "Seguir sin GPS", color: "#8a9299", valor: "sin"}, {texto: "Volver", color: "#8a9299", valor: null}])});
+  if(r === "sin") return true;
+  if(r !== "esperar") return false;
+  if(S.gpsError != null) iniciarGPS(true);
+  avisoFijo("📍 Buscando GPS…");
+  const ok = await esperarGPS(15000);
+  quitarAvisoFijo();
+  if(!ok) aviso("Sin señal GPS todavía. Sal a cielo abierto y vuelve a pulsar Empezar.");
+  return ok;
+}
+async function tomarPunto(){
+  const t0 = Date.now();
+  let mejor = null;
+  const coger = () => { const g = gpsFresco(GPS_FRESCO_MS); if(g && (!mejor || g.prec < mejor.prec)) mejor = {lat: g.lat, lon: g.lon, prec: g.prec, ts: g.ts}; };
+  coger();
+  if(mejor && mejor.prec <= GPS_BUENO_M) return mejor;
+  if(!gpsFresco(60000) || S.gpsError === 1) return mejor;
+  try{ navigator.geolocation.getCurrentPosition(onGPS, () => {}, {enableHighAccuracy: true, maximumAge: 0, timeout: GPS_ESPERA_MS}); } catch(e){}
+  avisoFijo("📍 Quieto junto al árbol…" + (mejor ? " ±" + mejor.prec + " m" : ""));
+  while(Date.now() - t0 < GPS_ESPERA_MS){
+    await espera(250);
+    coger();
+    if(mejor) avisoFijo("📍 Quieto junto al árbol… ±" + mejor.prec + " m");
+    if(mejor && mejor.prec <= GPS_BUENO_M) break;
+  }
+  quitarAvisoFijo();
+  if(!mejor){ const g = gpsFresco(20000); if(g) mejor = {lat: g.lat, lon: g.lon, prec: g.prec, ts: g.ts}; }
+  return mejor;
 }
 function pintarChipGPS(e){
   const c = $("chip-gps");
@@ -928,6 +979,7 @@ async function empezarConteo(){
   iniciarGPS(false);
   const n = S.nuevo, d = datosFinca();
   if(!n.parcela){ aviso("Elige la parcela"); return; }
+  if(!await asegurarGPS()) return;
   const ev = evaluarPosicion(n.parcela, S.gps);
   if(ev.estado === "otra"){
     const ok = await pregunta("¿Parcela correcta?", "El GPS te sitúa en <b>" + esc(ev.otra) + "</b>, no en " + esc(n.parcela) + ".", "Empezar en " + n.parcela, "Volver a elegir");
@@ -950,6 +1002,7 @@ async function empezarConteo(){
   S.nuevo = {tipo: n.tipo, parcela: "", normaEdit: null};
   S.cap = nuevaCaptura(f);
   pintarContar();
+  if(gpsUtil()) await alerta("Punto GPS de cada árbol", "Pulsa <b>«Guardar árbol»</b> estando <b>junto al tronco</b>.<br>El punto se toma en ese momento.");
 }
 function continuarForm(id){
   const f = formPorId(id);
@@ -980,7 +1033,7 @@ function nuevaCaptura(f){
   const p = proponerPosicion(f);
   return {edit: null, fila: {v: p ? String(p.fila) : "", prop: !!p}, arbol: {v: p ? String(p.arbol) : "", prop: !!p}, bateria: {v: "", prop: false},
     ramas: [ramaVacia(f)], br: {l: "", c: "", sc: ""}, verBr: false,
-    foco: p ? {t: "rama", i: 0, k: columnas(f)[0]} : {t: "fila"}, gps: null, iniciado: false, aceptados: {}};
+    foco: p ? {t: "rama", i: 0, k: columnas(f)[0]} : {t: "fila"}, iniciado: false, aceptados: {}};
 }
 function capturaDesde(f, a){
   const cols = columnas(f);
@@ -990,7 +1043,7 @@ function capturaDesde(f, a){
   return {edit: a.id_local, fila: {v: String(a.fila || ""), prop: false}, arbol: {v: String(a.arbol || ""), prop: false},
     bateria: {v: a.bateria != null ? String(a.bateria) : "", prop: false}, ramas,
     br: {l: b.l != null ? String(b.l) : "", c: b.c != null ? String(b.c) : "", sc: b.sc != null ? String(b.sc) : ""},
-    verBr: !!a.br, foco: {t: "rama", i: 0, k: cols[0]}, gps: null, iniciado: true, aceptados: {}};
+    verBr: !!a.br, foco: {t: "rama", i: 0, k: cols[0]}, iniciado: true, aceptados: {}};
 }
 function arbolDeCaptura(f, cap){
   const cols = columnas(f);
@@ -1119,9 +1172,9 @@ function pintarGPSArbol(){
     el.innerHTML = a && a.lat != null ? '<span style="color:#5b6467">📍 guardada ±' + a.precision + ' m</span>' : '<span style="color:' + ALTO + '">sin GPS</span>';
     return;
   }
-  const g = cap.gps || S.gps;
+  const g = gpsFresco(30000);
   if(!g){ el.innerHTML = '<span style="color:' + ALTO + '">📍 sin GPS</span>'; return; }
-  el.innerHTML = '<span style="color:' + (g.prec <= 10 ? VERDE : g.prec <= 25 ? BAJO : ALTO) + '">📍 ±' + g.prec + ' m' + (cap.gps ? ' · fijada' : '') + '</span>';
+  el.innerHTML = '<span style="color:' + (g.prec <= GPS_BUENO_M ? VERDE : g.prec <= 25 ? BAJO : ALTO) + '">📍 ±' + g.prec + ' m</span>';
 }
 function pintarFranja(){
   const el = $("franja"), f = formActivo();
@@ -1168,7 +1221,7 @@ function tecla(k){
   const f = formActivo(), cap = S.cap;
   if(!f || !cap) return;
   if(k === "OK"){ siguiente(f, cap); return; }
-  if(!cap.iniciado){ cap.iniciado = true; if(S.gps && Date.now() - S.gps.ts < 30000) cap.gps = Object.assign({}, S.gps); }
+  if(!cap.iniciado) cap.iniciado = true;
   const fo = cap.foco;
   let v = valorFoco(cap) || "";
   if((fo.t === "fila" || fo.t === "arbol") && cap[fo.t].prop){ v = ""; cap[fo.t].prop = false; }
@@ -1223,6 +1276,11 @@ function atras(){
 
 // ---------- Guardar, corregir, borrar ----------
 async function guardarArbol(){
+  if(S.guardando) return;
+  S.guardando = true;
+  try{ await guardarArbolPaso(); } finally { S.guardando = false; }
+}
+async function guardarArbolPaso(){
   const f = formActivo(), cap = S.cap;
   if(!f || !cap) return;
   const fila = parseInt(cap.fila.v, 10), arbol = parseInt(cap.arbol.v, 10);
@@ -1239,8 +1297,7 @@ async function guardarArbol(){
   }
   const rep = arbolesDe(f.id_local).filter(a => a.id_local !== cap.edit && a.fila === fila && a.arbol === arbol);
   if(rep.length && !await pregunta("Árbol repetido", "Ya has contado <b>fila " + fila + " · árbol " + arbol + "</b> en este conteo (nº " + rep.map(a => a.n_orden).join(", ") + ").<br>¿Guardarlo otra vez?", "Guardar igualmente", "Corregir")){ enfocar({t: "arbol"}); return; }
-  let gps = cap.gps;
-  if(!gps && S.gps && Date.now() - S.gps.ts < 30000) gps = Object.assign({}, S.gps);
+  const gps = cap.edit ? null : await tomarPunto();
   if(!cap.edit){
     const ev = evaluarPosicion(f.parcela, gps);
     if(ev.estado === "otra" && !await pregunta("¿Parcela correcta?", "El GPS te sitúa en <b>" + esc(ev.otra) + "</b>, no en " + esc(f.parcela) + ".<br>¿Guardar el árbol en " + esc(f.parcela) + "?", "Sí, guardar", "Cancelar")) return;
@@ -1266,7 +1323,7 @@ async function guardarArbol(){
   catch(e){ await alerta("No se pudo guardar el árbol", esc(e.message || e) + "<br>No cierres la app: vuelve a pulsar Guardar."); return; }
   const c = calcArbol(f, a), gr = grado(c.valor, normaDe(f));
   aviso((prev ? "Corregido" : "Guardado") + " nº " + a.n_orden + " · F" + fila + " A" + arbol + " · " +
-    (a.sin_ramas ? "sin ramas" : fmt(c.valor, f.tipo === "poda" ? 1 : 0) + " " + LABOR[f.tipo].unidad + " · " + textoGrado(gr, f.tipo)) + (gps || prev ? "" : " · sin GPS"));
+    (a.sin_ramas ? "sin ramas" : fmt(c.valor, f.tipo === "poda" ? 1 : 0) + " " + LABOR[f.tipo].unidad + " · " + textoGrado(gr, f.tipo)) + (prev ? "" : !gps ? " · sin GPS" : gps.prec > 15 ? " · GPS ±" + gps.prec + " m" : ""));
   S.cap = nuevaCaptura(f);
   pintarCaptura(f);
   window.scrollTo({top: 0, behavior: "smooth"});
@@ -1954,7 +2011,9 @@ if("serviceWorker" in navigator){
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").then(reg => {
       reg.addEventListener("updatefound", () => { const n = reg.installing; if(n) n.addEventListener("statechange", () => { if(n.state === "installed" && navigator.serviceWorker.controller) bannerVersion(reg); }); });
+      if(reg.waiting && navigator.serviceWorker.controller) bannerVersion(reg);
       setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+      document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible" && navigator.onLine) reg.update().catch(() => {}); });
     }).catch(e => console.warn("SW:", e));
     let rec = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => { if(rec) return; rec = true; location.reload(); });

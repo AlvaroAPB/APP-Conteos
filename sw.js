@@ -8,7 +8,7 @@
  */
 
 const CACHE_PREFIJO = "conteos-";
-const CACHE_VERSION = CACHE_PREFIJO + "v2d-1";
+const CACHE_VERSION = CACHE_PREFIJO + "v2f-1";
 const APP_SHELL = [
   "./",
   "./index.html",
